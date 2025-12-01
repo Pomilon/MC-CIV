@@ -1,10 +1,37 @@
 import os
-from mcrcon import MCRcon
+import socket
+from mcrcon import MCRcon, MCRconException
 from tenacity import retry, stop_after_attempt, wait_fixed
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+class MCRconNoSignal(MCRcon):
+    def __init__(self, host, password, port=25575, tlsmode=0, timeout=5):
+        self.host = host
+        self.password = password
+        self.port = port
+        self.tlsmode = tlsmode
+        self.timeout = timeout
+        self.socket = None # Initialize socket attribute
+        # Skip signal handler setup which is not thread-safe
+
+    def _read(self, length):
+        # Override to use socket timeout instead of signal.alarm
+        self.socket.settimeout(self.timeout)
+        try:
+            data = b""
+            while len(data) < length:
+                chunk = self.socket.recv(length - len(data))
+                if not chunk:
+                    raise MCRconException("Connection closed")
+                data += chunk
+            return data
+        except socket.timeout:
+            raise MCRconException("Connection timeout error")
+        finally:
+            self.socket.settimeout(None)
 
 class RconClient:
     def __init__(self, host, port, password):
@@ -23,7 +50,7 @@ class RconClient:
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def connect(self):
         try:
-            self.client = MCRcon(self.host, self.password, port=self.port)
+            self.client = MCRconNoSignal(self.host, self.password, port=self.port)
             self.client.connect()
             logger.info(f"Connected to RCON at {self.host}:{self.port}")
         except Exception as e:

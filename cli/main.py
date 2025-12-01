@@ -34,8 +34,10 @@ def start_node_bot(bot_id, mission):
         BOT_PROCESSES[bot_id].terminate()
     
     print(f"Spawning {bot_id} on port {port}...")
+    # Change cwd to bot-client to ensure node_modules are found
     proc = subprocess.Popen(
-        ["node", "bot-client/index.js"],
+        ["node", "index.js"],
+        cwd="bot-client",
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -50,12 +52,32 @@ def cleanup_bots():
         proc.terminate()
 
 def monitor_process(name, proc):
-    while True:
-        output = proc.stdout.readline()
-        if output:
-            print(f"[{name}] {output.strip()}")
-        if proc.poll() is not None:
-            break
+    def read_stream(stream, prefix):
+        while True:
+            output = stream.readline()
+            if output:
+                print(f"[{name} {prefix}] {output.strip()}")
+            else:
+                break
+    
+    # We need threads to read both stdout and stderr without blocking
+    t_out = threading.Thread(target=read_stream, args=(proc.stdout, "OUT"), daemon=True)
+    t_err = threading.Thread(target=read_stream, args=(proc.stderr, "ERR"), daemon=True)
+    t_out.start()
+    t_err.start()
+    
+    proc.wait()
+    print(f"[{name}] Process exited with code {proc.returncode}")
+
+def wait_for_port(port, timeout=10):
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            with socket.create_connection(("localhost", port), timeout=1):
+                return True
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            time.sleep(0.5)
+    return False
 
 def main():
     parser = argparse.ArgumentParser(description="AI Minecraft Storytelling Server")
@@ -102,15 +124,17 @@ def main():
         # Log bot output in thread
         threading.Thread(target=monitor_process, args=(bot_id, BOT_PROCESSES[bot_id]), daemon=True).start()
         
-        # Start Controller
-        # Wait slightly for Node to be ready
-        time.sleep(2) 
-        controller = AgentController(f"http://localhost:{port}", llm, mission)
-        BOT_CONTROLLERS.append(controller)
-        
-        agent_thread = threading.Thread(target=controller.run_loop, args=(5,), daemon=True)
-        agent_thread.start()
-        print(f"{bot_id} Controller Started.")
+        # Wait for port to be open
+        if wait_for_port(port):
+             print(f"{bot_id} is ready on port {port}")
+             controller = AgentController(f"http://localhost:{port}", llm, mission)
+             BOT_CONTROLLERS.append(controller)
+             
+             agent_thread = threading.Thread(target=controller.run_loop, args=(5,), daemon=True)
+             agent_thread.start()
+             print(f"{bot_id} Controller Started.")
+        else:
+             print(f"Failed to start {bot_id} on port {port}. Check logs.")
 
     print(f"System Running with {args.bots} bots. Press Ctrl+C to stop.")
     try:
