@@ -1,0 +1,8 @@
+{
+  "memory": [
+    "Command: {'action': 'CHAT', 'message': 'Hi'}",
+    "Command: {'action': 'CHAT', 'message': 'Hi'}",
+    "Command: {'action': 'CHAT', 'message': 'Hi'}"
+  ],
+  "locations": {}
+}

@@ -1,0 +1,24 @@
+services:
+  storyteller:
+    build: .
+    container_name: ai_storyteller
+    volumes:
+      - ./data:/app/data # Persist agent memory
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - RCON_HOST=${RCON_HOST:-host.docker.internal}
+      - RCON_PORT=${RCON_PORT:-25575}
+      - RCON_PASSWORD=${RCON_PASSWORD:-password}
+      - MC_HOST=${MC_HOST:-host.docker.internal}
+      - MC_PORT=${MC_PORT:-25565}
+    network_mode: "host" # Needed to connect to local Minecraft server easily
+    # If not using host networking, use 'extra_hosts' to reach host.docker.internal on Linux
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+    command: ["--mode", "real", "--provider", "gemini", "--bots", "2"]
+
+  # Optional: Dashboard (if we split it out, but currently CLI spawns it or we run it separate)
+  # Ideally CLI should launch dashboard or we run dashboard in a separate container.
+  # But dashboard/app.py depends on `AGENT_REGISTRY` which is currently in-memory/stubbed.
+  # For this phase, we run the CLI which spawns bots. 
