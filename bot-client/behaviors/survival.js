@@ -1,11 +1,32 @@
 function setup(bot) {
-    bot.loadPlugin(require('mineflayer-auto-eat').plugin)
+    const autoEatModule = require('mineflayer-auto-eat')
+    console.log("DEBUG: AutoEat Module keys:", Object.keys(autoEatModule))
+
+    // Try to identify the plugin function from various potential exports
+    const plugin = autoEatModule.plugin || autoEatModule.loader || autoEatModule.default || autoEatModule
+
+    if (typeof plugin !== 'function') {
+        console.error("CRITICAL: Could not find autoEat plugin function. Module type:", typeof autoEatModule)
+        return
+    }
+
+    try {
+        bot.loadPlugin(plugin)
+    } catch (err) {
+        console.error("CRITICAL: Failed to load autoEat plugin:", err)
+        return
+    }
     
     // Config auto eat
-    bot.autoEat.options = {
-        priority: 'foodPoints',
-        startAt: 14,
-        bannedFood: []
+    if (bot.autoEat) {
+        bot.autoEat.options = {
+            priority: 'foodPoints',
+            startAt: 14,
+            bannedFood: []
+        }
+    } else {
+        console.error("WARNING: bot.autoEat is undefined after plugin load. functionality disabled.")
+        console.log("DEBUG: Bot keys:", Object.keys(bot).filter(k => k.toLowerCase().includes('eat')))
     }
     
     // Auto Sleep logic

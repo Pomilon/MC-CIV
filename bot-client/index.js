@@ -106,7 +106,7 @@ app.get('/observe', (req, res) => {
     inventory: bot.inventory.items().map(item => ({ name: item.name, count: item.count })),
     nearby_entities: Object.values(bot.entities)
       .filter(e => e.id !== bot.entity.id && bot.entity.position.distanceTo(e.position) < 15)
-      .map(e => ({ type: e.type, name: e.username || e.mobType, position: e.position })),
+      .map(e => ({ type: e.type, name: e.username || e.displayName || e.mobType, position: e.position })),
     nearby_blocks: uniqueBlocks,
     chat_history: chatHistory.slice(-5),
     time: bot.time.timeOfDay,
@@ -217,7 +217,7 @@ app.post('/act', async (req, res) => {
       case 'SET_COMBAT_MODE':
           const combatRes = combatBehavior.setCombatMode(bot, params.mode, params.target)
           behaviorState.combatMode = params.mode
-          if (params.mode === 'pvp') behaviorState.explorationMode = 'stop' # Conflict resolution
+          if (params.mode === 'pvp') behaviorState.explorationMode = 'stop'
           result = combatRes
           break
 
@@ -248,7 +248,7 @@ app.post('/act', async (req, res) => {
       case 'SET_EXPLORATION_MODE':
           const exploreRes = explorationBehavior.setExplorationMode(bot, params.mode, params.target)
           behaviorState.explorationMode = params.mode
-          if (params.mode !== 'stop') behaviorState.combatMode = 'none' # Conflict resolution
+          if (params.mode !== 'stop') behaviorState.combatMode = 'none'
           result = exploreRes
           break
 

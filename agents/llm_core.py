@@ -80,7 +80,7 @@ class GeminiLLM(LLMProvider):
             chat = model.start_chat()
             full_prompt = f"{system_prompt}\n\n{user_prompt}"
             
-            response = chat.sendMessage(full_prompt)
+            response = chat.send_message(full_prompt)
             
             for part in response.parts:
                 if part.function_call:
