@@ -2,7 +2,6 @@
 FROM python:3.12-slim
 
 # Install system dependencies and Node.js
-# UPDATED: Changed node_20.x to node_22.x to satisfy minecraft-protocol requirements
 RUN apt-get update && apt-get install -y \
     curl \
     gnupg \
@@ -13,6 +12,9 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -d /home/appuser -m appuser
 
 # Set working directory
 WORKDIR /app
@@ -27,11 +29,25 @@ WORKDIR /app/bot-client
 RUN npm install
 WORKDIR /app
 
-# Copy the rest of the application code
-COPY . .
+# Copy application code (Ordered by frequency of change to optimize layering)
+COPY --chown=appuser:appuser agents agents
+COPY --chown=appuser:appuser cli cli
+COPY --chown=appuser:appuser infrastructure infrastructure
+COPY --chown=appuser:appuser narrator narrator
+COPY --chown=appuser:appuser bot-client bot-client
+COPY --chown=appuser:appuser dashboard dashboard
+COPY --chown=appuser:appuser data data
+COPY --chown=appuser:appuser docs docs
+COPY --chown=appuser:appuser tests tests
+COPY --chown=appuser:appuser .env.example LICENSE README.md ./
 
-# Create data directory for persistence
-RUN mkdir -p data/agents
+# Create data directory and set permissions
+# We use 777 to ensure the non-root user can write even if a bind mount overlays it with different permissions
+RUN mkdir -p data/agents && chmod -R 777 data && chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
 
 # Environment variables (Defaults)
 ENV PYTHONUNBUFFERED=1
@@ -39,5 +55,9 @@ ENV PORT=3000
 ENV PYTHONPATH=/app
 
 # Command to run the CLI
-ENTRYPOINT ["python", "cli/main.py"]
+
+ENTRYPOINT ["python3", "-m", "cli.main"]
+
+# Default: Mock mode. Override with: "--mode real --host host.docker.internal --port 25565 --disable-narrator"
+
 CMD ["--mode", "mock"]

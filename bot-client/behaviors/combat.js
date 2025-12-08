@@ -1,72 +1,63 @@
 const { goals } = require('mineflayer-pathfinder')
 
-let combatMode = 'none' // 'pvp', 'none'
-let survivalPreset = 'neutral' // 'brave', 'cowardly', 'neutral'
-let targetEntity = null
-
 function setup(bot) {
     bot.loadPlugin(require('mineflayer-pvp').plugin)
     bot.loadPlugin(require('mineflayer-armor-manager'))
-    
-    // Auto defense loop
-    bot.on('physicsTick', () => {
-        if (combatMode === 'pvp' && targetEntity) {
-            // PVP Plugin handles attack, we just ensure we are looking/moving
-            if (!bot.pvp.target) {
-                bot.pvp.attack(targetEntity)
-            }
-        }
-        
-        if (survivalPreset === 'cowardly') {
-            const nearestHostile = bot.nearestEntity(e => e.type === 'hostile' && e.position.distanceTo(bot.entity.position) < 10)
-            if (nearestHostile) {
-                // Run away
-                bot.pvp.stop() // Stop fighting if we were
-                const inverseGoal = new goals.GoalInvert(new goals.GoalFollow(nearestHostile, 5))
-                bot.pathfinder.setGoal(inverseGoal)
-            }
-        } else if (survivalPreset === 'brave') {
-            // Auto attack hostiles if not already busy
-            if (!bot.pvp.target && combatMode !== 'pvp') {
-                const nearestHostile = bot.nearestEntity(e => e.type === 'hostile' && e.position.distanceTo(bot.entity.position) < 8)
-                if (nearestHostile) {
-                     bot.pvp.attack(nearestHostile)
-                }
-            }
-        }
-    })
-    
-    // Log PvP events
-    bot.on('startedAttacking', () => console.log("Started attacking"))
-    bot.on('stoppedAttacking', () => console.log("Stopped attacking"))
 }
 
-function setCombatMode(bot, mode, targetName) {
-    combatMode = mode
-    
-    if (mode === 'pvp') {
+async function engageTarget(bot, targetName) {
+    return new Promise((resolve, reject) => {
         const entity = bot.nearestEntity(e => (e.username === targetName || e.mobType === targetName))
-        if (entity) {
-            targetEntity = entity
-            bot.pvp.attack(entity)
-            return { status: 'success', message: `Attacking ${targetName}` }
-        } else {
-            return { status: 'failed', reason: 'Target not found' }
+        if (!entity) {
+            return reject("TargetNotFound")
         }
-    } else {
-        bot.pvp.stop()
-        targetEntity = null
-        bot.pathfinder.setGoal(null)
-        return { status: 'success', message: 'Combat stopped' }
-    }
+
+        console.log(`Engaging ${targetName}...`)
+        bot.pvp.attack(entity)
+
+        // Safety check loop
+        const checkInterval = setInterval(() => {
+            if (bot.health < 5) {
+                bot.pvp.stop()
+                cleanup()
+                resolve("LowHealthRetreat")
+            }
+            if (bot.entity.position.distanceTo(entity.position) > 20) {
+                 // Too far, maybe gave up?
+            }
+        }, 500)
+
+        const cleanup = () => {
+            clearInterval(checkInterval)
+            bot.removeListener('stoppedAttacking', onStopped)
+            bot.removeListener('entityGone', onEntityGone)
+        }
+
+        const onStopped = () => {
+            // Mineflayer-pvp emits this when target is dead or unreachable
+            // But sometimes it emits it when just cooling down? 
+            // Actually mineflayer-pvp 'stoppedAttacking' usually means finish.
+            // Let's verify if target is valid.
+            if (!entity.isValid) {
+                 cleanup()
+                 resolve("TargetKilled")
+            } else {
+                // If stopped but entity valid, maybe lost path?
+                cleanup()
+                resolve("AttackStopped")
+            }
+        }
+
+        const onEntityGone = (e) => {
+            if (e === entity) {
+                cleanup()
+                resolve("TargetKilled")
+            }
+        }
+
+        bot.on('stoppedAttacking', onStopped)
+        bot.on('entityGone', onEntityGone)
+    })
 }
 
-function setSurvivalPreset(bot, preset) {
-    if (['brave', 'cowardly', 'neutral'].includes(preset)) {
-        survivalPreset = preset
-        return { status: 'success', message: `Survival preset set to ${preset}` }
-    }
-    return { status: 'failed', reason: 'Invalid preset' }
-}
-
-module.exports = { setup, setCombatMode, setSurvivalPreset }
+module.exports = { setup, engageTarget }

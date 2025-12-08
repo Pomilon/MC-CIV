@@ -1,0 +1,7 @@
+{
+  "memory": [
+    "Command: {'block_name': 'iron_ore', 'count': 1, 'action': 'MINE'}",
+    "Command: {'block_name': 'iron_ore', 'count': 1, 'action': 'MINE'}"
+  ],
+  "locations": {}
+}

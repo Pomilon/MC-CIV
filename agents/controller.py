@@ -15,7 +15,7 @@ class AgentController:
         self.llm = llm
         self.mission = mission
         self.bot_id = bot_id
-        self.last_action_status = "success"
+        self.current_action_id = None
         
         # Persistence
         self.storage = StorageManager(bot_id)
@@ -32,13 +32,42 @@ class AgentController:
             raise e
         return None
 
-    def reason(self, observation):
+    def reason(self, observation, action_state):
         chat_log = "\n".join([f"{c['username']}: {c['message']}" for c in observation.get('chat_history', [])])
-        memory_str = "\n".join([f"- {m}" for m in self.memory])
-        behavior_state = observation.get('behavior_state', {})
-        
+        # Convert deque to list for slicing/iteration safety
+        memory_str = "\n".join([f"- {m}" for m in list(self.memory)[-15:]]) 
         locations_str = ", ".join([f"{k}: {v}" for k, v in self.locations.items()])
         
+        last_result = "None (Startup)"
+        if action_state:
+            status = action_state.get('status')
+            signal = action_state.get('endSignal')
+            error = action_state.get('error')
+            data = action_state.get('data')
+            
+            if status == 'completed':
+                if signal == "ZoneInspected" and data:
+                    # Format as slices
+                    origin = data.get('origin', {})
+                    layers = data.get('layers', [])
+                    
+                    viz_lines = [f"ZONE INSPECTION (Origin: {origin.get('x')}, {origin.get('y')}, {origin.get('z')}):"]
+                    
+                    for y, layer in enumerate(layers):
+                        abs_y = origin.get('y', 0) + y
+                        viz_lines.append(f"--- Layer Y+{y} (Abs {abs_y}) ---")
+                        for z, row in enumerate(layer):
+                            row_str = ", ".join(row)
+                            viz_lines.append(f"Z+{z}: [{row_str}]")
+                            
+                    last_result = "\n".join(viz_lines)
+                else:
+                    last_result = f"SUCCESS: {signal}"
+            elif status == 'failed':
+                last_result = f"FAILURE: {error} (Partial: {signal})"
+            elif status == 'idle':
+                last_result = "IDLE"
+
         system_prompt = f"""
         You are an intelligent Minecraft COMMANDER.
         Your GLOBAL MISSION is: {self.mission}.
@@ -46,26 +75,32 @@ class AgentController:
         You control a bot that has AUTONOMOUS capabilities.
         
         COMMANDS AVAILABLE:
-        - SET_COMBAT_MODE (mode="pvp"|"none", target="...")
-        - SET_SURVIVAL (preset="brave"|"cowardly"|"neutral")
-        - BUILD (structure_type="wall", location="...")
+        - SET_COMBAT_MODE (mode="pvp"|"none", target="...") -> ATTACKS target until death or retreat.
+        - BUILD (structure_type="wall"|"floor"|"shelter"|"tower", location="...")
+        - PLACE_BLOCK (block_name="...", position="x y z" OR near_block="...")
+        - BREAK_BLOCK (block_name="...", position="x y z"?) -> Pos takes precedence.
+        - INSPECT_ZONE (corner1="x y z", corner2="x y z") -> Returns list of blocks in area.
         - INVENTORY (task="equip_best"|"sort"|"discard_junk")
         - MOVE (target="Name" or "x y z")
+        - THROW_ITEM (item_name="...", count=1)
+        - USE_ITEM (item_name="...") -> Eat/Drink/Use.
+        - MOUNT (target="...") / DISMOUNT
+        - SLEEP / WAKE
         - SAVE_LOCATION (name="...") -> Remembers current position.
         - SET_EXPLORATION_MODE (mode="wander"|"follow"|"stop", target="...")
-        - MINE/CRAFT/CHAT
+        - MINE (block_name="...") / CRAFT (item_name="...")
+        - INTERACT (target_block="...") -> Use block (chest, lever, etc).
+        - CHAT (message="...")
+        - STOP -> Interrupts current action.
         
         KNOWN LOCATIONS: {locations_str}
         
-        CURRENT STATE:
-        - Combat: {behavior_state.get('combatMode')}
-        - Explore: {behavior_state.get('explorationMode')}
+        LAST ACTION RESULT: {last_result}
         
         GUIDELINES:
-        1. To explore, use SET_EXPLORATION_MODE.
-        2. To go to a saved location, use MOVE with the location name.
-        
-        Your previous action status was: {self.last_action_status}.
+        1. If last action FAILED, try a different approach or fix the issue.
+        2. If last action SUCCESS, proceed to next step of mission.
+        3. Do not repeat the same failed command endlessly.
         """
         
         user_prompt = f"""
@@ -94,69 +129,91 @@ class AgentController:
         
         action_type = action_dict.get('action')
         
+        # Handle Local Memory Actions
         if action_type == 'SAVE_LOCATION':
-            obs = self.observe_safe() # Use non-raising version or cached?
-            # Ideally observe() is called once per loop.
-            # But here we need fresh coords if not passed.
-            # Let's assume we use the last observation from the loop?
-            # Refactor: `act` should probably receive the current observation context.
-            # For robustness, let's fetch strictly.
+            # We need current position.
+            # We can't blocking observe here easily without refactor, 
+            # but usually we have just observed. 
+            # Ideally reason() should have passed the relevant coords context or we fetch it.
+            # For now, let's just observe quickly.
             try:
                 obs = self.observe()
+                if obs and 'position' in obs:
+                    p = obs['position']
+                    coords = f"{int(p['x'])} {int(p['y'])} {int(p['z'])}"
+                    name = action_dict.get('name')
+                    self.locations[name] = coords
+                    self.memory.append(f"Saved location '{name}' at {coords}")
+                    self.storage.save(self.memory, self.locations)
             except:
-                obs = None
-                
-            if obs and 'position' in obs:
-                p = obs['position']
-                coords = f"{int(p['x'])} {int(p['y'])} {int(p['z'])}"
-                name = action_dict.get('name')
-                self.locations[name] = coords
-                self.memory.append(f"Saved location '{name}' at {coords}")
-                self.storage.save(self.memory, self.locations)
-                return 
-        
-        elif action_type == 'MOVE':
+                pass
+            return None # No bot action needed
+
+        # Resolve Targets
+        if action_type == 'MOVE':
             target = action_dict.get('target')
             if target in self.locations:
                 action_dict['target'] = self.locations[target]
-                self.memory.append(f"Resolved '{target}' to {action_dict['target']}")
 
         self.memory.append(f"Command: {action_dict}")
         self.storage.save(self.memory, self.locations)
         
         try:
-            self._send_command(action_dict)
+            return self._send_command(action_dict)
         except Exception as e:
             logger.error(f"Failed to act: {e}")
-            self.last_action_status = "network_exception"
+            return None
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(1), retry=retry_if_exception_type(requests.RequestException))
     def _send_command(self, action_dict):
         response = requests.post(f"{self.bot_url}/act", json=action_dict, timeout=5)
         if response.status_code == 200:
             res_data = response.json()
-            self.last_action_status = res_data.get('status', 'unknown')
-            if self.last_action_status == 'failed':
-                self.memory.append(f"Command Failed: {res_data.get('reason')}")
-        else:
-            self.last_action_status = "network_error"
+            return res_data.get('action_id')
+        return None
 
     def observe_safe(self):
         try:
             return self.observe()
-        except:
+        except Exception:
             return None
 
-    def run_loop(self, interval=5):
+    def observe_safe(self):
+        try:
+            return self.observe()
+        except Exception:
+            return None
+
+    def run_loop(self, interval=2):
         logger.info(f"Starting Agent Loop for mission: {self.mission}")
         while True:
             try:
                 obs = self.observe_safe()
                 if obs:
-                    action = self.reason(obs)
-                    self.act(action)
+                    action_state = obs.get('action_state', {})
+                    status = action_state.get('status', 'idle')
+                    
+                    if status == 'running':
+                        # Action is still running, wait.
+                        pass
+                    else:
+                        try:
+                            action = self.reason(obs, action_state)
+                            if action:
+                                new_id = self.act(action)
+                                if new_id:
+                                    self.current_action_id = new_id
+                                    time.sleep(0.5) 
+                        except Exception as e:
+                            logger.error(f"Reasoning/Acting Error: {e}")
+                            # Prevent hot-looping on error
+                            time.sleep(2)
                 else:
-                    logger.warning("No observation received. Is bot client running?")
+                    logger.warning("Bot unavailable (Booting or Disconnected)... waiting.")
+                    time.sleep(5) # Wait longer if bot is down
+                    
             except Exception as e:
-                logger.error(f"Error in Agent Loop: {e}")
+                logger.critical(f"Critical Error in Agent Loop: {e}")
+                time.sleep(5)
+            
             time.sleep(interval)

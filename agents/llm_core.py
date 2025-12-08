@@ -1,4 +1,3 @@
-# Update LLMProvider to support new tools
 import os
 import logging
 import json
@@ -7,13 +6,23 @@ from typing import Any, Dict, List, Optional
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 from openai import OpenAI
+from pydantic import TypeAdapter, ValidationError
 from agents.grammar import (
-    MoveAction, ChatAction, MineAction, CraftAction, EquipAction, IdleAction,
-    SetCombatMode, SetSurvivalPreset, BuildStructure, ManageInventory,
-    SaveLocation, SetExplorationMode
+    AgentAction, MoveAction, ChatAction, MineAction, CraftAction, EquipAction, IdleAction, 
+    AttackAction, BuildStructure, PlaceBlock, InspectZone, ManageInventory, 
+    BreakBlock, ThrowItem, UseItem, MountEntity, DismountEntity, Sleep, Wake, 
+    StopAction, InteractAction, SaveLocation, ExploreAction, 
+    BroadcastEvent, SpawnEvent, WeatherEvent, WaitEvent
 )
 
 logger = logging.getLogger(__name__)
+
+ALL_ACTIONS = [
+    MoveAction, ChatAction, MineAction, CraftAction, EquipAction, IdleAction, StopAction,
+    AttackAction, BuildStructure, PlaceBlock, InspectZone, ManageInventory, InteractAction,
+    BreakBlock, ThrowItem, UseItem, MountEntity, DismountEntity, Sleep, Wake,
+    SaveLocation, ExploreAction
+]
 
 class LLMProvider(ABC):
     @abstractmethod
@@ -51,19 +60,14 @@ def pydantic_to_gemini_tool(model):
     )
 
 class GeminiLLM(LLMProvider):
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash-exp"):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-2.5-flash"):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         if self.api_key:
             genai.configure(api_key=self.api_key)
         self.model_name = model_name
         
         # Default Agent Tools
-        action_models = [
-            MoveAction, ChatAction, MineAction, CraftAction, EquipAction, IdleAction,
-            SetCombatMode, SetSurvivalPreset, BuildStructure, ManageInventory,
-            SaveLocation, SetExplorationMode
-        ]
-        self.default_tools = Tool(function_declarations=[pydantic_to_gemini_tool(m) for m in action_models])
+        self.default_tools = Tool(function_declarations=[pydantic_to_gemini_tool(m) for m in ALL_ACTIONS])
         self.tools = self.default_tools
 
     def generate_response(self, system_prompt: str, user_prompt: str, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
@@ -86,24 +90,42 @@ class GeminiLLM(LLMProvider):
                 if part.function_call:
                     fc = part.function_call
                     args = dict(fc.args)
-                    
-                    # Explicit mapping for ALL tools
                     name = fc.name
-                    if name == "MoveAction": args["action"] = "MOVE"
+                    
+                    # Automap if name matches the Pydantic model name (which it should)
+                    # and the 'action' field is already in the args (if defined as literal).
+                    # If action is missing, we must inject it.
+                    # Pydantic models in grammar have 'action' as a Literal default, 
+                    # but Gemini args might skip it if it's constant?
+                    # No, usually defaults are not sent. We need to set it.
+                    
+                    # Mapping logic
+                    if name == "AttackAction": args["action"] = "SET_COMBAT_MODE"
+                    elif name == "ExploreAction": args["action"] = "SET_EXPLORATION_MODE"
+                    # For others, the class name usually maps to action if we set it up right, 
+                    # but let's be safe.
+                    elif name == "MoveAction": args["action"] = "MOVE"
                     elif name == "ChatAction": args["action"] = "CHAT"
                     elif name == "MineAction": args["action"] = "MINE"
                     elif name == "CraftAction": args["action"] = "CRAFT"
                     elif name == "EquipAction": args["action"] = "EQUIP"
                     elif name == "IdleAction": args["action"] = "IDLE"
-                    
-                    elif name == "SetCombatMode": args["action"] = "SET_COMBAT_MODE"
-                    elif name == "SetSurvivalPreset": args["action"] = "SET_SURVIVAL"
+                    elif name == "StopAction": args["action"] = "STOP"
                     elif name == "BuildStructure": args["action"] = "BUILD"
+                    elif name == "PlaceBlock": args["action"] = "PLACE_BLOCK"
+                    elif name == "InspectZone": args["action"] = "INSPECT_ZONE"
                     elif name == "ManageInventory": args["action"] = "INVENTORY"
-                    
+                    elif name == "InteractAction": args["action"] = "INTERACT"
+                    elif name == "BreakBlock": args["action"] = "BREAK_BLOCK"
+                    elif name == "ThrowItem": args["action"] = "THROW_ITEM"
+                    elif name == "UseItem": args["action"] = "USE_ITEM"
+                    elif name == "MountEntity": args["action"] = "MOUNT"
+                    elif name == "DismountEntity": args["action"] = "DISMOUNT"
+                    elif name == "Sleep": args["action"] = "SLEEP"
+                    elif name == "Wake": args["action"] = "WAKE"
                     elif name == "SaveLocation": args["action"] = "SAVE_LOCATION"
-                    elif name == "SetExplorationMode": args["action"] = "SET_EXPLORATION_MODE"
                     
+                    # Narrator
                     elif name == "BroadcastEvent": args["action"] = "BROADCAST"
                     elif name == "SpawnEvent": args["action"] = "SPAWN"
                     elif name == "WeatherEvent": args["action"] = "WEATHER"
@@ -122,17 +144,14 @@ class OpenAILLM(LLMProvider):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.client = OpenAI(api_key=self.api_key) if self.api_key else None
         self.model_name = model_name
+        
+        self.action_models = ALL_ACTIONS
 
     def generate_response(self, system_prompt: str, user_prompt: str, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
         if not self.client:
              return {"action": "IDLE", "reason": "Missing API Key"}
 
-        # Define tools based on default or passed models
-        active_models = tools if tools else [
-            MoveAction, ChatAction, MineAction, CraftAction, EquipAction, IdleAction,
-            SetCombatMode, SetSurvivalPreset, BuildStructure, ManageInventory,
-            SaveLocation, SetExplorationMode
-        ]
+        active_models = tools if tools else self.action_models
         
         openai_tools = []
         for model in active_models:
@@ -165,21 +184,29 @@ class OpenAILLM(LLMProvider):
                 action_name = tool_call.function.name
                 args = json.loads(tool_call.function.arguments)
                 
-                # Explicit mapping
-                if action_name == "MoveAction": args["action"] = "MOVE"
+                # Manual Mapping (Same as Gemini)
+                if action_name == "AttackAction": args["action"] = "SET_COMBAT_MODE"
+                elif action_name == "ExploreAction": args["action"] = "SET_EXPLORATION_MODE"
+                elif action_name == "MoveAction": args["action"] = "MOVE"
                 elif action_name == "ChatAction": args["action"] = "CHAT"
                 elif action_name == "MineAction": args["action"] = "MINE"
                 elif action_name == "CraftAction": args["action"] = "CRAFT"
                 elif action_name == "EquipAction": args["action"] = "EQUIP"
                 elif action_name == "IdleAction": args["action"] = "IDLE"
-
-                elif action_name == "SetCombatMode": args["action"] = "SET_COMBAT_MODE"
-                elif action_name == "SetSurvivalPreset": args["action"] = "SET_SURVIVAL"
+                elif action_name == "StopAction": args["action"] = "STOP"
                 elif action_name == "BuildStructure": args["action"] = "BUILD"
+                elif action_name == "PlaceBlock": args["action"] = "PLACE_BLOCK"
+                elif action_name == "InspectZone": args["action"] = "INSPECT_ZONE"
                 elif action_name == "ManageInventory": args["action"] = "INVENTORY"
-                
+                elif action_name == "InteractAction": args["action"] = "INTERACT"
+                elif action_name == "BreakBlock": args["action"] = "BREAK_BLOCK"
+                elif action_name == "ThrowItem": args["action"] = "THROW_ITEM"
+                elif action_name == "UseItem": args["action"] = "USE_ITEM"
+                elif action_name == "MountEntity": args["action"] = "MOUNT"
+                elif action_name == "DismountEntity": args["action"] = "DISMOUNT"
+                elif action_name == "Sleep": args["action"] = "SLEEP"
+                elif action_name == "Wake": args["action"] = "WAKE"
                 elif action_name == "SaveLocation": args["action"] = "SAVE_LOCATION"
-                elif action_name == "SetExplorationMode": args["action"] = "SET_EXPLORATION_MODE"
                 
                 elif action_name == "BroadcastEvent": args["action"] = "BROADCAST"
                 elif action_name == "SpawnEvent": args["action"] = "SPAWN"
@@ -195,12 +222,44 @@ class OpenAILLM(LLMProvider):
             return {"action": "IDLE", "reason": str(e)}
 
 class MockLLM(LLMProvider):
+
     def generate_response(self, system_prompt: str, user_prompt: str, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
+
         return {"action": "CHAT", "message": "Mock Response"}
+
+
+
+class OllamaLLM(OpenAILLM):
+    """
+    Ollama implementation using the OpenAI-compatible API.
+    """
+    def __init__(self, base_url: str = None, model_name: str = "llama3.1", **kwargs):
+        self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        self.api_key = "ollama" # Required dummy key
+        self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        self.model_name = model_name
+        
+        self.action_models = ALL_ACTIONS
+
+class LlamaCppLLM(OpenAILLM):
+    """
+    Llama.cpp server implementation using the OpenAI-compatible API.
+    """
+    def __init__(self, base_url: str = None, model_name: str = "default", **kwargs):
+        self.base_url = base_url or os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1")
+        self.api_key = "llamacpp" # Required dummy key
+        self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        self.model_name = model_name
+        
+        self.action_models = ALL_ACTIONS
 
 def get_llm_provider(provider_name: str, **kwargs) -> LLMProvider:
     if provider_name.lower() == "gemini":
         return GeminiLLM(**kwargs)
     elif provider_name.lower() == "openai":
         return OpenAILLM(**kwargs)
+    elif provider_name.lower() == "ollama":
+        return OllamaLLM(**kwargs)
+    elif provider_name.lower() == "llamacpp":
+        return LlamaCppLLM(**kwargs)
     return MockLLM()

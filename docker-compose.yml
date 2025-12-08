@@ -7,18 +7,43 @@ services:
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - RCON_HOST=${RCON_HOST:-host.docker.internal}
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
+      - LLAMACPP_BASE_URL=http://host.docker.internal:8080/v1
+      - RCON_HOST=host.docker.internal
       - RCON_PORT=${RCON_PORT:-25575}
       - RCON_PASSWORD=${RCON_PASSWORD:-password}
-      - MC_HOST=${MC_HOST:-host.docker.internal}
+      - MC_HOST=host.docker.internal
       - MC_PORT=${MC_PORT:-25565}
-    network_mode: "host" # Needed to connect to local Minecraft server easily
-    # If not using host networking, use 'extra_hosts' to reach host.docker.internal on Linux
-    # extra_hosts:
-    #   - "host.docker.internal:host-gateway"
-    command: ["--mode", "real", "--provider", "gemini", "--bots", "2"]
+    # Secure Networking: Bridge mode + explicit host access
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - mc_net
+    
+    # Resource Limits (Sandboxing)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+    
+    # Security Options
+    security_opt:
+      - no-new-privileges:true
+    read_only: false # App writes to /app/data and /tmp
+    
+    # Run with flexible options. 
+    # To disable narrator (for LAN): add "--disable-narrator" to command or override in .env/CLI
+    command: >
+      --mode real 
+      --provider ${LLM_PROVIDER:-gemini}
+      ${LLM_MODEL_FLAG}
+      --bots 2
+      --host ${MC_HOST:-host.docker.internal}
+      --port ${MC_PORT:-25565}
+      ${DISABLE_NARRATOR_FLAG}
 
-  # Optional: Dashboard (if we split it out, but currently CLI spawns it or we run it separate)
-  # Ideally CLI should launch dashboard or we run dashboard in a separate container.
-  # But dashboard/app.py depends on `AGENT_REGISTRY` which is currently in-memory/stubbed.
-  # For this phase, we run the CLI which spawns bots. 
+networks:
+  mc_net:
+    driver: bridge
+ 
