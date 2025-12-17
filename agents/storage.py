@@ -14,11 +14,12 @@ class StorageManager:
         if not os.path.exists(data_dir):
             os.makedirs(data_dir)
 
-    def save(self, memory: deque, locations: dict):
+    def save(self, memory: deque, locations: dict, long_term_memory: list = None):
         try:
             data = {
                 "memory": list(memory),
-                "locations": locations
+                "locations": locations,
+                "long_term_memory": long_term_memory or []
             }
             with open(self.filepath, 'w') as f:
                 json.dump(data, f, indent=2)
@@ -26,9 +27,9 @@ class StorageManager:
         except Exception as e:
             logger.error(f"Failed to save state for {self.bot_id}: {e}")
 
-    def load(self) -> tuple[deque, dict]:
+    def load(self) -> tuple[deque, dict, list]:
         if not os.path.exists(self.filepath):
-            return deque(maxlen=15), {}
+            return deque(maxlen=15), {}, []
         
         try:
             with open(self.filepath, 'r') as f:
@@ -36,8 +37,9 @@ class StorageManager:
             
             memory = deque(data.get("memory", []), maxlen=15)
             locations = data.get("locations", {})
+            long_term_memory = data.get("long_term_memory", [])
             logger.info(f"Loaded state for {self.bot_id}")
-            return memory, locations
+            return memory, locations, long_term_memory
         except Exception as e:
             logger.error(f"Failed to load state for {self.bot_id}: {e}")
-            return deque(maxlen=15), {}
+            return deque(maxlen=15), {}, []

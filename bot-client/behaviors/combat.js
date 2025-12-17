@@ -7,7 +7,7 @@ function setup(bot) {
 
 async function engageTarget(bot, targetName) {
     return new Promise((resolve, reject) => {
-        const entity = bot.nearestEntity(e => (e.username === targetName || e.mobType === targetName))
+        const entity = bot.nearestEntity(e => (e.username === targetName || e.mobType === targetName || e.name === targetName))
         if (!entity) {
             return reject("TargetNotFound")
         }
@@ -22,9 +22,6 @@ async function engageTarget(bot, targetName) {
                 cleanup()
                 resolve("LowHealthRetreat")
             }
-            if (bot.entity.position.distanceTo(entity.position) > 20) {
-                 // Too far, maybe gave up?
-            }
         }, 500)
 
         const cleanup = () => {
@@ -34,15 +31,10 @@ async function engageTarget(bot, targetName) {
         }
 
         const onStopped = () => {
-            // Mineflayer-pvp emits this when target is dead or unreachable
-            // But sometimes it emits it when just cooling down? 
-            // Actually mineflayer-pvp 'stoppedAttacking' usually means finish.
-            // Let's verify if target is valid.
             if (!entity.isValid) {
                  cleanup()
                  resolve("TargetKilled")
             } else {
-                // If stopped but entity valid, maybe lost path?
                 cleanup()
                 resolve("AttackStopped")
             }
@@ -60,4 +52,33 @@ async function engageTarget(bot, targetName) {
     })
 }
 
-module.exports = { setup, engageTarget }
+async function huntCreature(bot, creatureName, count = 1) {
+    let defeated = 0
+    let attempts = 0
+    
+    while (defeated < count && attempts < count * 3) {
+        attempts++
+        try {
+            const result = await engageTarget(bot, creatureName)
+            if (result === "TargetKilled") {
+                defeated++
+            } else if (result === "LowHealthRetreat") {
+                return `HuntPaused_LowHealth_${defeated}`
+            }
+        } catch (err) {
+            if (err === "TargetNotFound") {
+                // For now, fail if not found immediately to avoid infinite wandering.
+                if (defeated > 0) return `PartialHunt_${defeated}_NoMoreFound`
+                throw new Error("TargetNotFound")
+            }
+            console.log("Hunt error:", err)
+        }
+        
+        // Small pause between targets
+        await new Promise(r => setTimeout(r, 1000))
+    }
+    
+    return `Hunted_${defeated}_${creatureName}`
+}
+
+module.exports = { setup, engageTarget, huntCreature }

@@ -1,9 +1,12 @@
 import os
 import logging
 import json
+import random
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 import google.generativeai as genai
+from google.api_core.exceptions import ResourceExhausted
 from google.generativeai.types import FunctionDeclaration, Tool
 from openai import OpenAI
 from pydantic import TypeAdapter, ValidationError
@@ -11,17 +14,21 @@ from agents.grammar import (
     AgentAction, MoveAction, ChatAction, MineAction, CraftAction, EquipAction, IdleAction, 
     AttackAction, BuildStructure, PlaceBlock, InspectZone, ManageInventory, 
     BreakBlock, ThrowItem, UseItem, MountEntity, DismountEntity, Sleep, Wake, 
-    StopAction, InteractAction, SaveLocation, ExploreAction, 
-    BroadcastEvent, SpawnEvent, WeatherEvent, WaitEvent
+    StopAction, InteractAction, SaveLocation, Remember, ExploreAction, 
+    BroadcastEvent, SpawnEvent, WeatherEvent, WaitEvent,
+    GatherResource, HuntCreature, FindAndCollect,
+    SmeltItem, ClearArea, DepositToChest, FarmLoop,
+    ConfigureBehavior
 )
 
 logger = logging.getLogger(__name__)
 
 ALL_ACTIONS = [
-    MoveAction, ChatAction, MineAction, CraftAction, EquipAction, IdleAction, StopAction,
-    AttackAction, BuildStructure, PlaceBlock, InspectZone, ManageInventory, InteractAction,
-    BreakBlock, ThrowItem, UseItem, MountEntity, DismountEntity, Sleep, Wake,
-    SaveLocation, ExploreAction
+    MoveAction, ChatAction, MineAction, GatherResource, CraftAction, EquipAction, IdleAction, StopAction,
+    AttackAction, HuntCreature, BuildStructure, PlaceBlock, InspectZone, ManageInventory, InteractAction,
+    BreakBlock, ThrowItem, UseItem, FindAndCollect, MountEntity, DismountEntity, Sleep, Wake,
+    SmeltItem, ClearArea, DepositToChest, FarmLoop, ConfigureBehavior,
+    SaveLocation, Remember, ExploreAction
 ]
 
 class LLMProvider(ABC):
@@ -61,83 +68,123 @@ def pydantic_to_gemini_tool(model):
 
 class GeminiLLM(LLMProvider):
     def __init__(self, api_key: str = None, model_name: str = "gemini-2.5-flash"):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
+        # Support multiple keys via comma-separated string
+        keys_str = os.getenv("GEMINI_API_KEYS", "")
+        self.api_keys = [k.strip() for k in keys_str.split(',') if k.strip()]
+        
+        # Fallback to single key
+        single_key = api_key or os.getenv("GEMINI_API_KEY")
+        if single_key and single_key not in self.api_keys:
+            self.api_keys.append(single_key)
+            
+        if not self.api_keys:
+            logger.warning("No GEMINI_API_KEYS or GEMINI_API_KEY found.")
+
+        # Randomize start index to distribute load across processes
+        self.current_key_index = random.randint(0, len(self.api_keys) - 1) if self.api_keys else 0
         self.model_name = model_name
         
         # Default Agent Tools
         self.default_tools = Tool(function_declarations=[pydantic_to_gemini_tool(m) for m in ALL_ACTIONS])
         self.tools = self.default_tools
 
+    def _get_current_key(self):
+        if not self.api_keys:
+            return None
+        return self.api_keys[self.current_key_index]
+
+    def _rotate_key(self):
+        if not self.api_keys:
+            return
+        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+        logger.info(f"Rotated Gemini API Key to index {self.current_key_index}")
+
     def generate_response(self, system_prompt: str, user_prompt: str, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
-        if not self.api_key:
+        if not self.api_keys:
              return {"action": "IDLE", "reason": "Missing API Key"}
 
-        try:
-            active_tools = self.default_tools
-            if tools:
-                declarations = [pydantic_to_gemini_tool(m) for m in tools]
-                active_tools = Tool(function_declarations=declarations)
+        active_tools = self.default_tools
+        if tools:
+            declarations = [pydantic_to_gemini_tool(m) for m in tools]
+            active_tools = Tool(function_declarations=declarations)
 
-            model = genai.GenerativeModel(self.model_name, tools=[active_tools])
-            chat = model.start_chat()
-            full_prompt = f"{system_prompt}\n\n{user_prompt}"
-            
-            response = chat.send_message(full_prompt)
-            
-            for part in response.parts:
-                if part.function_call:
-                    fc = part.function_call
-                    args = dict(fc.args)
-                    name = fc.name
-                    
-                    # Automap if name matches the Pydantic model name (which it should)
-                    # and the 'action' field is already in the args (if defined as literal).
-                    # If action is missing, we must inject it.
-                    # Pydantic models in grammar have 'action' as a Literal default, 
-                    # but Gemini args might skip it if it's constant?
-                    # No, usually defaults are not sent. We need to set it.
-                    
-                    # Mapping logic
-                    if name == "AttackAction": args["action"] = "SET_COMBAT_MODE"
-                    elif name == "ExploreAction": args["action"] = "SET_EXPLORATION_MODE"
-                    # For others, the class name usually maps to action if we set it up right, 
-                    # but let's be safe.
-                    elif name == "MoveAction": args["action"] = "MOVE"
-                    elif name == "ChatAction": args["action"] = "CHAT"
-                    elif name == "MineAction": args["action"] = "MINE"
-                    elif name == "CraftAction": args["action"] = "CRAFT"
-                    elif name == "EquipAction": args["action"] = "EQUIP"
-                    elif name == "IdleAction": args["action"] = "IDLE"
-                    elif name == "StopAction": args["action"] = "STOP"
-                    elif name == "BuildStructure": args["action"] = "BUILD"
-                    elif name == "PlaceBlock": args["action"] = "PLACE_BLOCK"
-                    elif name == "InspectZone": args["action"] = "INSPECT_ZONE"
-                    elif name == "ManageInventory": args["action"] = "INVENTORY"
-                    elif name == "InteractAction": args["action"] = "INTERACT"
-                    elif name == "BreakBlock": args["action"] = "BREAK_BLOCK"
-                    elif name == "ThrowItem": args["action"] = "THROW_ITEM"
-                    elif name == "UseItem": args["action"] = "USE_ITEM"
-                    elif name == "MountEntity": args["action"] = "MOUNT"
-                    elif name == "DismountEntity": args["action"] = "DISMOUNT"
-                    elif name == "Sleep": args["action"] = "SLEEP"
-                    elif name == "Wake": args["action"] = "WAKE"
-                    elif name == "SaveLocation": args["action"] = "SAVE_LOCATION"
-                    
-                    # Narrator
-                    elif name == "BroadcastEvent": args["action"] = "BROADCAST"
-                    elif name == "SpawnEvent": args["action"] = "SPAWN"
-                    elif name == "WeatherEvent": args["action"] = "WEATHER"
-                    elif name == "WaitEvent": args["action"] = "WAIT"
+        max_retries = 5
+        base_delay = 2
 
-                    return args
-            
-            return {"action": "IDLE", "reason": "No tool called"}
+        for attempt in range(max_retries):
+            try:
+                current_key = self._get_current_key()
+                genai.configure(api_key=current_key)
+                
+                model = genai.GenerativeModel(self.model_name, tools=[active_tools])
+                chat = model.start_chat()
+                full_prompt = f"{system_prompt}\n\n{user_prompt}"
+                
+                response = chat.send_message(full_prompt)
+                
+                for part in response.parts:
+                    if part.function_call:
+                        fc = part.function_call
+                        args = dict(fc.args)
+                        name = fc.name
+                        
+                        # Mapping logic
+                        if name == "AttackAction": args["action"] = "SET_COMBAT_MODE"
+                        elif name == "ExploreAction": args["action"] = "SET_EXPLORATION_MODE"
+                        elif name == "MoveAction": args["action"] = "MOVE"
+                        elif name == "ChatAction": args["action"] = "CHAT"
+                        elif name == "MineAction": args["action"] = "MINE"
+                        elif name == "GatherResource": args["action"] = "GATHER"
+                        elif name == "HuntCreature": args["action"] = "HUNT"
+                        elif name == "FindAndCollect": args["action"] = "COLLECT_ITEM"
+                        elif name == "SmeltItem": args["action"] = "SMELT"
+                        elif name == "ClearArea": args["action"] = "CLEAR_AREA"
+                        elif name == "DepositToChest": args["action"] = "DEPOSIT"
+                        elif name == "FarmLoop": args["action"] = "FARM"
+                        elif name == "ConfigureBehavior": args["action"] = "CONFIGURE"
+                        elif name == "CraftAction": args["action"] = "CRAFT"
+                        elif name == "EquipAction": args["action"] = "EQUIP"
+                        elif name == "IdleAction": args["action"] = "IDLE"
+                        elif name == "StopAction": args["action"] = "STOP"
+                        elif name == "BuildStructure": args["action"] = "BUILD"
+                        elif name == "PlaceBlock": args["action"] = "PLACE_BLOCK"
+                        elif name == "InspectZone": args["action"] = "INSPECT_ZONE"
+                        elif name == "ManageInventory": args["action"] = "INVENTORY"
+                        elif name == "InteractAction": args["action"] = "INTERACT"
+                        elif name == "BreakBlock": args["action"] = "BREAK_BLOCK"
+                        elif name == "ThrowItem": args["action"] = "THROW_ITEM"
+                        elif name == "UseItem": args["action"] = "USE_ITEM"
+                        elif name == "MountEntity": args["action"] = "MOUNT"
+                        elif name == "DismountEntity": args["action"] = "DISMOUNT"
+                        elif name == "Sleep": args["action"] = "SLEEP"
+                        elif name == "Wake": args["action"] = "WAKE"
+                        elif name == "SaveLocation": args["action"] = "SAVE_LOCATION"
+                        elif name == "Remember": args["action"] = "REMEMBER"
+                        
+                        # Narrator
+                        elif name == "BroadcastEvent": args["action"] = "BROADCAST"
+                        elif name == "SpawnEvent": args["action"] = "SPAWN"
+                        elif name == "WeatherEvent": args["action"] = "WEATHER"
+                        elif name == "WaitEvent": args["action"] = "WAIT"
 
-        except Exception as e:
-            logger.error(f"Gemini API Error: {e}")
-            return {"action": "IDLE", "reason": str(e)}
+                        return args
+                
+                return {"action": "IDLE", "reason": "No tool called"}
+
+            except ResourceExhausted:
+                logger.warning(f"Gemini Quota Exceeded on key ...{current_key[-4:]}. Rotating...")
+                self._rotate_key()
+                # If we have rotated back to start or just have 1 key, we must sleep
+                time.sleep(base_delay * (attempt + 1))
+            except Exception as e:
+                logger.error(f"Gemini API Error: {e}")
+                if "429" in str(e): # Handle generic 429 if not caught by ResourceExhausted
+                    self._rotate_key()
+                    time.sleep(base_delay * (attempt + 1))
+                else:
+                    return {"action": "IDLE", "reason": str(e)}
+        
+        return {"action": "IDLE", "reason": "Max Retries Exceeded"}
 
 class OpenAILLM(LLMProvider):
     def __init__(self, api_key: str = None, model_name: str = "gpt-4o"):
@@ -207,6 +254,7 @@ class OpenAILLM(LLMProvider):
                 elif action_name == "Sleep": args["action"] = "SLEEP"
                 elif action_name == "Wake": args["action"] = "WAKE"
                 elif action_name == "SaveLocation": args["action"] = "SAVE_LOCATION"
+                elif action_name == "Remember": args["action"] = "REMEMBER"
                 
                 elif action_name == "BroadcastEvent": args["action"] = "BROADCAST"
                 elif action_name == "SpawnEvent": args["action"] = "SPAWN"

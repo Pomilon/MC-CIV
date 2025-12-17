@@ -22,7 +22,7 @@ class TestAgentController(unittest.TestCase):
         obs = controller.observe()
         self.assertIsNotNone(obs)
         
-        action = controller.reason(obs)
+        action = controller.reason(obs, action_state={})
         self.assertEqual(action["action"], "CHAT")
         
         controller.act(action)

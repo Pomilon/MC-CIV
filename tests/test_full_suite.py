@@ -70,8 +70,6 @@ class TestPersistence(unittest.TestCase):
 class TestAgentRobustness(unittest.TestCase):
     @patch('requests.get')
     def test_retry_observe(self, mock_get):
-        # Simulate failure then success (Exception must be RequestsException for tenacity to catch it based on my impl)
-        # Actually my impl uses retry_if_exception_type(requests.RequestException)
         
         mock_get.side_effect = [requests.exceptions.ConnectionError("Net Error"), requests.exceptions.ConnectionError("Net Error"), MagicMock(status_code=200, json=lambda: {})]
         

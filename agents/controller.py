@@ -2,6 +2,7 @@ import time
 import requests
 import logging
 import json
+import os
 from collections import deque
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 from agents.llm_core import LLMProvider
@@ -10,16 +11,39 @@ from agents.storage import StorageManager
 logger = logging.getLogger(__name__)
 
 class AgentController:
-    def __init__(self, bot_url: str, llm: LLMProvider, mission: str, bot_id: str = "Bot1"):
+    def __init__(self, bot_url: str, llm: LLMProvider, mission: str, bot_id: str = "Bot1", profile_path: str = None):
         self.bot_url = bot_url
         self.llm = llm
         self.mission = mission
         self.bot_id = bot_id
         self.current_action_id = None
         
+        # Load Profile
+        self.profile = {}
+        if profile_path and os.path.exists(profile_path):
+            try:
+                with open(profile_path, 'r') as f:
+                    self.profile = json.load(f)
+                logger.info(f"Loaded profile from {profile_path}")
+            except Exception as e:
+                logger.error(f"Failed to load profile: {e}")
+        
+        # Fallback if profile missing
+        if not self.profile:
+            base_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'profiles', 'base.json')
+            if os.path.exists(base_path):
+                 with open(base_path, 'r') as f:
+                    self.profile = json.load(f)
+            else:
+                self.profile = {
+                    "persona": "You are a standard Minecraft Bot.",
+                    "system_template": "{persona}\nMission: {mission}\n\nCOMMANDS:\n{command_docs}\n\nLocations: {locations}\nLast Result: {last_result}",
+                    "command_docs": "Standard Commands Available."
+                }
+
         # Persistence
         self.storage = StorageManager(bot_id)
-        self.memory, self.locations = self.storage.load()
+        self.memory, self.locations, self.long_term_memory = self.storage.load()
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(1), retry=retry_if_exception_type(requests.RequestException))
     def observe(self):
@@ -32,10 +56,29 @@ class AgentController:
             raise e
         return None
 
+    def _get_feedback_hint(self, error):
+        error = str(error).lower()
+        if "itemnotininventory" in error or "missing item" in error:
+            return " -> HINT: Check your inventory. You may need to MINE, GATHER, or CRAFT the item first."
+        if "blocknotfound" in error or "targetisair" in error:
+            return " -> HINT: The target block was not found nearby. Try to MOVE to a different location or EXPLORE."
+        if "targetnotfound" in error or "entitynotfound" in error:
+            return " -> HINT: The entity is not nearby. Use SET_EXPLORATION_MODE to find it."
+        if "nopath" in error or "unreachable" in error:
+            return " -> HINT: The bot cannot reach the target. It might be blocked. Try clearing the way or moving closer."
+        if "recipe" in error:
+            return " -> HINT: You are missing resources or the recipe does not exist. Check requirements."
+        if "dimensions" in error:
+            return " -> HINT: Dimensions must be 'W H D' (integers)."
+        if "unknown item" in error or "unknown block" in error:
+            return " -> HINT: The item/block name might be misspelled or invalid. Check the name."
+        return ""
+
     def reason(self, observation, action_state):
         chat_log = "\n".join([f"{c['username']}: {c['message']}" for c in observation.get('chat_history', [])])
         # Convert deque to list for slicing/iteration safety
         memory_str = "\n".join([f"- {m}" for m in list(self.memory)[-15:]]) 
+        long_term_str = "\n".join([f"- {m}" for m in self.long_term_memory])
         locations_str = ", ".join([f"{k}: {v}" for k, v in self.locations.items()])
         
         last_result = "None (Startup)"
@@ -64,44 +107,24 @@ class AgentController:
                 else:
                     last_result = f"SUCCESS: {signal}"
             elif status == 'failed':
-                last_result = f"FAILURE: {error} (Partial: {signal})"
+                hint = self._get_feedback_hint(error)
+                last_result = f"FAILURE: {error} (Partial: {signal}){hint}"
             elif status == 'idle':
                 last_result = "IDLE"
 
-        system_prompt = f"""
-        You are an intelligent Minecraft COMMANDER.
-        Your GLOBAL MISSION is: {self.mission}.
+        # Construct System Prompt from Profile
+        template = self.profile.get("system_template", "")
+        persona = self.profile.get("persona", "You are a Minecraft Bot.")
+        command_docs = self.profile.get("command_docs", "Use available tools.")
         
-        You control a bot that has AUTONOMOUS capabilities.
-        
-        COMMANDS AVAILABLE:
-        - SET_COMBAT_MODE (mode="pvp"|"none", target="...") -> ATTACKS target until death or retreat.
-        - BUILD (structure_type="wall"|"floor"|"shelter"|"tower", location="...")
-        - PLACE_BLOCK (block_name="...", position="x y z" OR near_block="...")
-        - BREAK_BLOCK (block_name="...", position="x y z"?) -> Pos takes precedence.
-        - INSPECT_ZONE (corner1="x y z", corner2="x y z") -> Returns list of blocks in area.
-        - INVENTORY (task="equip_best"|"sort"|"discard_junk")
-        - MOVE (target="Name" or "x y z")
-        - THROW_ITEM (item_name="...", count=1)
-        - USE_ITEM (item_name="...") -> Eat/Drink/Use.
-        - MOUNT (target="...") / DISMOUNT
-        - SLEEP / WAKE
-        - SAVE_LOCATION (name="...") -> Remembers current position.
-        - SET_EXPLORATION_MODE (mode="wander"|"follow"|"stop", target="...")
-        - MINE (block_name="...") / CRAFT (item_name="...")
-        - INTERACT (target_block="...") -> Use block (chest, lever, etc).
-        - CHAT (message="...")
-        - STOP -> Interrupts current action.
-        
-        KNOWN LOCATIONS: {locations_str}
-        
-        LAST ACTION RESULT: {last_result}
-        
-        GUIDELINES:
-        1. If last action FAILED, try a different approach or fix the issue.
-        2. If last action SUCCESS, proceed to next step of mission.
-        3. Do not repeat the same failed command endlessly.
-        """
+        # Safe format
+        system_prompt = template.format(
+            persona=persona,
+            mission=self.mission,
+            command_docs=command_docs,
+            locations=locations_str,
+            last_result=last_result
+        )
         
         user_prompt = f"""
         OBSERVATION:
@@ -115,7 +138,10 @@ class AgentController:
         RECENT CHAT:
         {chat_log}
         
-        RECENT MEMORY:
+        LONG TERM MEMORY:
+        {long_term_str}
+
+        RECENT ACTION LOG:
         {memory_str}
         
         What is your reasoning and next COMMAND?
@@ -132,10 +158,6 @@ class AgentController:
         # Handle Local Memory Actions
         if action_type == 'SAVE_LOCATION':
             # We need current position.
-            # We can't blocking observe here easily without refactor, 
-            # but usually we have just observed. 
-            # Ideally reason() should have passed the relevant coords context or we fetch it.
-            # For now, let's just observe quickly.
             try:
                 obs = self.observe()
                 if obs and 'position' in obs:
@@ -144,10 +166,18 @@ class AgentController:
                     name = action_dict.get('name')
                     self.locations[name] = coords
                     self.memory.append(f"Saved location '{name}' at {coords}")
-                    self.storage.save(self.memory, self.locations)
+                    self.storage.save(self.memory, self.locations, self.long_term_memory)
             except:
                 pass
             return None # No bot action needed
+
+        if action_type == 'REMEMBER':
+            fact = action_dict.get('fact')
+            if fact:
+                self.long_term_memory.append(fact)
+                self.memory.append(f"Remembered: {fact}")
+                self.storage.save(self.memory, self.locations, self.long_term_memory)
+            return None
 
         # Resolve Targets
         if action_type == 'MOVE':
@@ -156,7 +186,7 @@ class AgentController:
                 action_dict['target'] = self.locations[target]
 
         self.memory.append(f"Command: {action_dict}")
-        self.storage.save(self.memory, self.locations)
+        self.storage.save(self.memory, self.locations, self.long_term_memory)
         
         try:
             return self._send_command(action_dict)
@@ -184,7 +214,7 @@ class AgentController:
         except Exception:
             return None
 
-    def run_loop(self, interval=2):
+    def run_loop(self, interval=5):
         logger.info(f"Starting Agent Loop for mission: {self.mission}")
         while True:
             try:

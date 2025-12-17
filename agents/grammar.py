@@ -37,23 +37,56 @@ class InteractAction(BaseModel):
     action: Literal["INTERACT"] = "INTERACT"
     target_block: str = Field(..., description="Name of block to interact with (e.g. chest, door).")
 
+class GatherResource(BaseModel):
+    action: Literal["GATHER"] = "GATHER"
+    resource: str = Field(..., description="Name of the block/resource to gather (e.g., 'oak_log', 'cobblestone').")
+    count: int = Field(1, description="Number of items/blocks to collect. The bot will search and mine until this amount is reached.")
+
+class HuntCreature(BaseModel):
+    action: Literal["HUNT"] = "HUNT"
+    creature_name: str = Field(..., description="Name of the creature to hunt (e.g., 'pig', 'zombie').")
+    count: int = Field(1, description="Number of creatures to defeat.")
+
+class FindAndCollect(BaseModel):
+    action: Literal["COLLECT_ITEM"] = "COLLECT_ITEM"
+    item_name: str = Field(..., description="Name of the dropped item to search for and pick up.")
+    count: int = Field(1, description="Number of items to collect.")
+
+class SmeltItem(BaseModel):
+    action: Literal["SMELT"] = "SMELT"
+    item_name: str = Field(..., description="Item to smelt (e.g. 'raw_iron').")
+    fuel_name: str = Field(..., description="Fuel to use (e.g. 'coal').")
+    count: int = Field(1, description="Number of items to smelt.")
+
+class ClearArea(BaseModel):
+    action: Literal["CLEAR_AREA"] = "CLEAR_AREA"
+    corner1: str = Field(..., description="Corner 1 coordinates.")
+    corner2: str = Field(..., description="Corner 2 coordinates.")
+
+class DepositToChest(BaseModel):
+    action: Literal["DEPOSIT"] = "DEPOSIT"
+    item_name: str = Field("all", description="Item to deposit, or 'all'.")
+    count: Optional[int] = Field(None, description="Amount to deposit. If None, deposits all.")
+
+class FarmLoop(BaseModel):
+    action: Literal["FARM"] = "FARM"
+    mode: Literal["harvest", "plant", "cycle"] = Field("cycle", description="'cycle' means harvest mature crops and replant.")
+    crop_name: str = Field(..., description="Crop to farm (e.g. 'wheat', 'carrots').")
+    count: int = Field(10, description="Approximate number of blocks to process.")
+
 # --- High Level Directives ---
 
 class AttackAction(BaseModel):
     action: Literal["SET_COMBAT_MODE"] = "SET_COMBAT_MODE" 
-    # Kept as SET_COMBAT_MODE for compatibility with existing prompt/logic if not fully renamed, 
-    # but description emphasizes discrete attack.
-    # Actually, let's keep the name mapping to 'SET_COMBAT_MODE' to match index.js for now,
-    # or I need to update index.js to accept 'ATTACK'.
-    # I'll stick to SET_COMBAT_MODE string for the JSON 'action' field to match index.js, 
-    # but the class name is AttackAction.
     mode: Literal["pvp", "none"] = Field("pvp", description="Set to 'pvp' to attack.")
     target: Optional[str] = Field(None, description="Target to attack. Required if mode='pvp'. Action ends when target dies or bot retreats.")
 
 class BuildStructure(BaseModel):
     action: Literal["BUILD"] = "BUILD"
-    structure_type: Literal["wall", "floor", "shelter", "tower"] = Field(..., description="Type of structure to build.")
-    location: Optional[str] = Field(None, description="Target location 'x y z' or relative.")
+    shape: Literal["wall", "floor", "box", "hollow_box", "tower", "stairs", "pyramid"] = Field(..., description="Geometric shape to build.")
+    material: str = Field(..., description="Block name to use (e.g. 'cobblestone').")
+    dimensions: str = Field(..., description="Size 'width height depth' (e.g. '10 5 10').")
+    location: Optional[str] = Field(None, description="Bottom-south-west corner 'x y z'.")
 
 class BreakBlock(BaseModel):
     action: Literal["BREAK_BLOCK"] = "BREAK_BLOCK"
@@ -106,10 +139,20 @@ class SaveLocation(BaseModel):
     action: Literal["SAVE_LOCATION"] = "SAVE_LOCATION"
     name: str = Field(..., description="Name to assign to the current location.")
 
+class Remember(BaseModel):
+    action: Literal["REMEMBER"] = "REMEMBER"
+    fact: str = Field(..., description="A fact or piece of information to store in long-term memory.")
+
 class ExploreAction(BaseModel):
     action: Literal["SET_EXPLORATION_MODE"] = "SET_EXPLORATION_MODE"
-    mode: Literal["wander", "follow", "stop"] = Field(..., description="'wander': move to random spot. 'follow': go to target.")
-    target: Optional[str] = Field(None, description="Target entity to follow if mode is 'follow'.")
+    mode: Literal["wander", "follow", "stop", "map", "find_biome"] = Field(..., description="'wander': random move. 'map': systematic spiral search of unvisited chunks. 'find_biome': search for biome. 'follow': follow entity.")
+    target: Optional[str] = Field(None, description="Target entity for 'follow' or biome name for 'find_biome'.")
+
+class ConfigureBehavior(BaseModel):
+    action: Literal["CONFIGURE"] = "CONFIGURE"
+    mode: Literal["self_defense", "auto_eat", "auto_sleep", "auto_collect", 
+                  "low_health_threshold", "low_health_action", "on_totem_pop", "auto_tool_swap"] = Field(..., description="Behavior to configure.")
+    setting: str = Field(..., description="Setting value (e.g. 'fight', 'flee', 'true', '5', 'run_away').")
 
 # --- Narrator Actions ---
 class BroadcastEvent(BaseModel):
@@ -131,10 +174,11 @@ class WaitEvent(BaseModel):
 
 # Unions
 AgentAction = Union[
-    MoveAction, ChatAction, MineAction, CraftAction, EquipAction, IdleAction, StopAction,
-    AttackAction, BuildStructure, PlaceBlock, InspectZone, ManageInventory, InteractAction,
-    BreakBlock, ThrowItem, UseItem, MountEntity, DismountEntity, Sleep, Wake,
-    SaveLocation, ExploreAction
+    MoveAction, ChatAction, MineAction, GatherResource, CraftAction, EquipAction, IdleAction, StopAction,
+    AttackAction, HuntCreature, BuildStructure, PlaceBlock, InspectZone, ManageInventory, InteractAction,
+    BreakBlock, ThrowItem, UseItem, FindAndCollect, MountEntity, DismountEntity, Sleep, Wake,
+    SmeltItem, ClearArea, DepositToChest, FarmLoop, ConfigureBehavior,
+    SaveLocation, Remember, ExploreAction
 ]
 
 NarratorAction = Union[BroadcastEvent, SpawnEvent, WeatherEvent, WaitEvent]

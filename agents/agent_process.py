@@ -19,11 +19,12 @@ def find_free_port():
         return s.getsockname()[1]
 
 class AgentProcess:
-    def __init__(self, bot_id, mission, provider="gemini", model_name=None):
+    def __init__(self, bot_id, mission, provider="gemini", model_name=None, profile_path=None):
         self.bot_id = bot_id
         self.mission = mission
         self.provider = provider
         self.model_name = model_name
+        self.profile_path = profile_path
         self.node_process = None
         self.controller = None
         self.port = find_free_port()
@@ -36,8 +37,6 @@ class AgentProcess:
         
         logger.info(f"Spawning Node.js bot {self.bot_id} on port {self.port}...")
         
-        # We start the node process. 
-        # We redirect stdout/stderr to this process's stdout/stderr so they are aggregated or can be piped.
         self.node_process = subprocess.Popen(
             ["node", "index.js"],
             cwd="bot-client",
@@ -75,7 +74,13 @@ class AgentProcess:
             llm_kwargs["model_name"] = self.model_name
             
         llm = get_llm_provider(self.provider, **llm_kwargs)
-        self.controller = AgentController(f"http://localhost:{self.port}", llm, self.mission, self.bot_id)
+        self.controller = AgentController(
+            f"http://localhost:{self.port}", 
+            llm, 
+            self.mission, 
+            self.bot_id, 
+            profile_path=self.profile_path
+        )
 
         # 4. Run Controller Loop
         # The controller loop is now the main thread of this process.
@@ -103,9 +108,10 @@ if __name__ == "__main__":
     parser.add_argument("--mission", required=True)
     parser.add_argument("--provider", default="gemini")
     parser.add_argument("--model", default=None)
+    parser.add_argument("--profile", default=None, help="Path to agent profile JSON")
     args = parser.parse_args()
 
-    agent = AgentProcess(args.bot_id, args.mission, args.provider, args.model)
+    agent = AgentProcess(args.bot_id, args.mission, args.provider, args.model, args.profile)
     
     # Handle signals to ensure child process cleanup
     def signal_handler(sig, frame):

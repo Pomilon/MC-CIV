@@ -15,6 +15,8 @@ const combatBehavior = require('./behaviors/combat')
 const buildingBehavior = require('./behaviors/building')
 const survivalBehavior = require('./behaviors/survival')
 const explorationBehavior = require('./behaviors/exploration')
+const automationBehavior = require('./behaviors/automation')
+const autonomyBehavior = require('./behaviors/autonomy')
 
 const app = express()
 app.use(bodyParser.json())
@@ -48,16 +50,10 @@ function updateState(status, signal = null, error = null, data = null) {
     if (signal) actionState.endSignal = signal
     if (error) actionState.error = error
     if (data) actionState.data = data
-    // If completed or failed, we keep the ID/Type for the client to see,
-    // until a new action starts.
 }
 
 function startAction(type, data) {
     if (actionState.status === 'running') {
-        // Automatically interrupt current action for new one? 
-        // Or reject? The prompt says "reject if busy unless interrupt".
-        // But for a smooth agent, usually overriding is better.
-        // Let's implement generic interrupt logic first.
         stopCurrentAction("Interrupted by new command")
     }
 
@@ -95,6 +91,23 @@ function cleanupBot() {
     bot = null
 }
 
+// --- Helper Interface for Autonomy ---
+const actionInterface = {
+    startAction: (type, data) => {
+        console.log(`[InternalAction] Starting ${type}`, data)
+        startAction(type, data)
+    },
+    stopAction: (reason) => {
+        stopCurrentAction(reason)
+    },
+    isBusy: () => {
+        return actionState.status === 'running'
+    },
+    getActionType: () => {
+         return actionState.type
+    }
+}
+
 function initBot() {
   if (bot) cleanupBot()
   
@@ -113,25 +126,20 @@ function initBot() {
   
   if (typeof autoEat === 'function') {
       bot.loadPlugin(autoEat)
-  } else {
-      console.log('Skipping autoEat plugin: Not a function')
   }
-  
   
   // Setup behaviors
   combatBehavior.setup(bot)
   buildingBehavior.setup(bot)
   survivalBehavior.setup(bot)
   explorationBehavior.setup(bot)
+  autonomyBehavior.setup(bot, actionInterface)
 
   bot.on('spawn', () => {
     console.log('Bot spawned')
-    // Initialize default movements for plugins (like collectBlock)
     const defaultMove = new Movements(bot)
     bot.pathfinder.setMovements(defaultMove)
 
-    // Reset action state on fresh spawn if needed? 
-    // Or keep it to resume? Usually better to reset.
     if (actionState.status === 'running') {
         updateState('failed', 'BotRestarted', 'Connection reset during action')
     }
@@ -139,9 +147,13 @@ function initBot() {
 
   bot.on('chat', (username, message) => {
     if (username === bot.username) return
+    
     const player = bot.players[username]
-    if (player && player.entity && bot.entity.position.distanceTo(player.entity.position) < 20) {
-        chatHistory.push({ username, message, time: Date.now() })
+    const isNearby = player && player.entity && bot.entity.position.distanceTo(player.entity.position) < 20
+    const isMention = message.toLowerCase().includes(bot.username.toLowerCase())
+    
+    if (isNearby || isMention) {
+        chatHistory.push({ username, message, time: Date.now(), nearby: isNearby, mention: isMention })
         if (chatHistory.length > 50) chatHistory.shift()
     }
   })
@@ -152,7 +164,6 @@ function initBot() {
       if (actionState.status === 'running') {
           updateState('failed', 'Disconnected', reason || 'Connection lost')
       }
-      // Prevent multiple reconnect loops if multiple events fire
       if (bot) cleanupBot() 
       setTimeout(initBot, 5000)
   }
@@ -177,6 +188,7 @@ function getBlockByName(name) {
 async function executeMove(target) {
     return new Promise((resolve, reject) => {
         const defaultMove = new Movements(bot)
+        defaultMove.allow1by1towers = false // Prevent pillar jumping if not needed
         bot.pathfinder.setMovements(defaultMove)
 
         let goal = null
@@ -203,9 +215,12 @@ async function executeMove(target) {
 
         bot.pathfinder.setGoal(goal)
         
+        let stuckCount = 0
+        
         const cleanup = () => {
             bot.removeListener('goal_reached', onGoalReached)
             bot.removeListener('path_update', onPathUpdate)
+            bot.removeListener('stuck', onStuck)
         }
 
         const onGoalReached = () => {
@@ -219,19 +234,42 @@ async function executeMove(target) {
                 reject("No Path Found")
             }
         }
+        
+        const onStuck = async () => {
+            stuckCount++
+            console.log(`[Move] Bot stuck! Attempt ${stuckCount}/3`)
+            
+            if (stuckCount > 3) {
+                cleanup()
+                reject("Bot stuck and cannot free itself")
+                return
+            }
+            
+            // Recovery: Stop, Jump Randomly, Retry
+            bot.pathfinder.stop()
+            bot.setControlState('jump', true)
+            bot.setControlState('forward', true)
+            if (Math.random() > 0.5) bot.setControlState('left', true)
+            else bot.setControlState('right', true)
+            
+            setTimeout(() => {
+                bot.clearControlStates()
+                // Retry pathing
+                bot.pathfinder.setGoal(goal)
+            }, 1000)
+        }
 
         bot.on('goal_reached', onGoalReached)
         bot.on('path_update', onPathUpdate)
+        bot.on('stuck', onStuck)
     })
 }
 
 async function executeMine(blockName, count = 1) {
-    // Basic single block mine for now, can loop for count
     const block = getBlockByName(blockName)
     if (!block) throw new Error("Block not found")
     
     return new Promise((resolve, reject) => {
-        // Ensure movements are set for pathfinding
         const defaultMove = new Movements(bot)
         bot.pathfinder.setMovements(defaultMove)
 
@@ -245,18 +283,38 @@ async function executeMine(blockName, count = 1) {
     })
 }
 
+function withTimeout(promise, ms, label = "Operation") {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} Timed Out after ${ms}ms`)), ms))
+    ])
+}
+
 async function executeCraft(itemName, count = 1) {
     const item = bot.registry.itemsByName[itemName]
     if(!item) throw new Error("Unknown item")
-    const recipe = bot.recipesFor(item.id, null, 1, null)[0]
-    if (!recipe) throw new Error("No recipe or resources")
-
-    return new Promise((resolve, reject) => {
-        bot.craft(recipe, count, null, (err) => { 
-            if (err) reject(err.message)
-            else resolve("Crafted")
-        })
-    })
+    
+    // Find recipe
+    const recipes = bot.recipesFor(item.id, null, 1, null)
+    if (!recipes || recipes.length === 0) throw new Error("No recipe or resources found")
+    
+    const recipe = recipes[0]
+    
+    return withTimeout(new Promise((resolve, reject) => {
+        const qty = Math.floor(count)
+        try {
+            bot.craft(recipe, qty, null, (err) => { 
+                if (err) {
+                    // Normalize error to string to avoid circular json issues if any
+                    reject(new Error(err.message || err))
+                } else {
+                    resolve(`Crafted_${qty}_${itemName}`)
+                }
+            })
+        } catch (e) {
+            reject(new Error(`Crafting Synchronous Error: ${e.message}`))
+        }
+    }), 5000 + (count * 100), "Crafting")
 }
 
 // --- API Endpoints ---
@@ -266,7 +324,6 @@ app.get('/observe', (req, res) => {
     return res.status(503).json({ error: 'Bot not ready' })
   }
 
-  // Optimize block finding
   const nearbyBlocks = bot.findBlocks({
       matching: (blk) => {
           return blk.name !== 'air' && blk.name !== 'grass_block' && blk.name !== 'dirt' && blk.name !== 'stone'
@@ -289,7 +346,8 @@ app.get('/observe', (req, res) => {
     chat_history: chatHistory.slice(-5),
     time: bot.time.timeOfDay,
     mission: mission,
-    action_state: actionState // Return the full state machine
+    action_state: actionState,
+    autonomy_config: autonomyBehavior.getConfig()
   }
   res.json(observation)
 })
@@ -302,15 +360,17 @@ app.post('/act', async (req, res) => {
     return res.status(503).json({ error: 'Bot not ready' })
   }
 
-  // 1. Start State
   const actionId = startAction(action, params)
   res.json({ status: 'started', action_id: actionId })
 
-  // 2. Execute Async
   try {
       let resultSignal = "Done"
 
       switch (action) {
+        case 'CONFIGURE':
+            resultSignal = await autonomyBehavior.configure(bot, params.mode, params.setting)
+            break
+
         case 'CHAT':
             if (canChat(bot)) {
                 bot.chat(params.message)
@@ -328,6 +388,18 @@ app.post('/act', async (req, res) => {
         
         case 'MINE':
             resultSignal = await executeMine(params.block_name, params.count)
+            break
+
+        case 'GATHER':
+            resultSignal = await survivalBehavior.gatherResource(bot, params.resource, params.count)
+            break
+
+        case 'HUNT':
+            resultSignal = await combatBehavior.huntCreature(bot, params.creature_name, params.count)
+            break
+
+        case 'COLLECT_ITEM':
+            resultSignal = await survivalBehavior.findAndCollect(bot, params.item_name, params.count)
             break
         
         case 'CRAFT':
@@ -350,11 +422,6 @@ app.post('/act', async (req, res) => {
             stopCurrentAction("StopCommand")
             resultSignal = "Stopped"
             break
-
-        // Legacy/Complex behaviors (Wrap them later or now?)
-        // For now, if they are not converted to Promise-returning, we fake it.
-        // But the plan says "Update system...".
-        // Let's rely on updated behaviors returning promises.
         
         case 'SET_COMBAT_MODE':
             if (params.mode === 'pvp') {
@@ -367,14 +434,13 @@ app.post('/act', async (req, res) => {
             break
 
         case 'BUILD':
-            let buildPos = bot.entity.position
-            if (params.location) {
-                const bCoords = params.location.match(/(-?\d+)\s+(-?\d+)\s+(-?\d+)/)
-                if (bCoords) {
-                    buildPos = new Vec3(parseInt(bCoords[1]), parseInt(bCoords[2]), parseInt(bCoords[3]))
-                }
-            }
-            resultSignal = await buildingBehavior.buildStructure(bot, params.structure_type, buildPos)
+            resultSignal = await buildingBehavior.buildStructure(
+                bot, 
+                params.shape, 
+                params.material, 
+                params.dimensions, 
+                params.location
+            )
             break
 
         case 'PLACE_BLOCK':
@@ -398,10 +464,32 @@ app.post('/act', async (req, res) => {
              
              const blocks = await buildingBehavior.inspectZone(bot, v1, v2)
              resultSignal = "ZoneInspected"
-             // Special case: we pass data to updateState
              updateState('completed', resultSignal, null, blocks)
-             return // Return early as we handled updateState manually
+             return 
              
+        case 'SMELT':
+            resultSignal = await automationBehavior.smeltItem(bot, params.item_name, params.fuel_name, params.count)
+            break
+            
+        case 'DEPOSIT':
+            resultSignal = await automationBehavior.depositToChest(bot, params.item_name, params.count)
+            break
+            
+        case 'FARM':
+            resultSignal = await automationBehavior.farmLoop(bot, params.mode, params.crop_name, params.count)
+            break
+            
+        case 'CLEAR_AREA':
+             const cc1 = params.corner1.match(/(-?\d+)\s+(-?\d+)\s+(-?\d+)/)
+             const cc2 = params.corner2.match(/(-?\d+)\s+(-?\d+)\s+(-?\d+)/)
+             if (!cc1 || !cc2) throw new Error("Invalid Coordinates")
+             
+             const cv1 = new Vec3(parseInt(cc1[1]), parseInt(cc1[2]), parseInt(cc1[3]))
+             const cv2 = new Vec3(parseInt(cc2[1]), parseInt(cc2[2]), parseInt(cc2[3]))
+             
+             resultSignal = await buildingBehavior.clearArea(bot, cv1, cv2)
+             break
+
         case 'INVENTORY':
             resultSignal = await survivalBehavior.manageInventory(bot, params.task)
             break
@@ -409,7 +497,6 @@ app.post('/act', async (req, res) => {
         case 'INTERACT':
             const iBlock = getBlockByName(params.target_block)
             if (!iBlock) throw new Error("BlockNotFound")
-            // activateBlock returns a promise
             await bot.activateBlock(iBlock)
             resultSignal = "Interacted"
             break
@@ -452,6 +539,11 @@ app.post('/act', async (req, res) => {
         case 'SET_EXPLORATION_MODE':
             if (params.mode === 'wander') {
                 resultSignal = await explorationBehavior.wander(bot)
+            } else if (params.mode === 'map') {
+                resultSignal = await explorationBehavior.exploreMap(bot)
+            } else if (params.mode === 'find_biome') {
+                 if (!params.target) throw new Error("Target biome required")
+                 resultSignal = await explorationBehavior.findBiome(bot, params.target)
             } else if (params.mode === 'follow') {
                 if (!params.target) throw new Error("TargetRequiredForFollow")
                 resultSignal = await explorationBehavior.follow(bot, params.target)

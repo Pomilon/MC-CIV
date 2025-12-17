@@ -1,7 +1,10 @@
 {
   "memory": [
     "Command: {'block_name': 'iron_ore', 'count': 1, 'action': 'MINE'}",
-    "Command: {'block_name': 'iron_ore', 'count': 1, 'action': 'MINE'}"
+    "Command: {'block_name': 'iron_ore', 'count': 1, 'action': 'MINE'}",
+    "Command: {'action': 'IDLE', 'reason': 'Connection error.'}",
+    "Command: {'action': 'IDLE', 'reason': 'Connection error.'}"
   ],
-  "locations": {}
+  "locations": {},
+  "long_term_memory": []
 }
