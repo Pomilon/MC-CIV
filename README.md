@@ -1,5 +1,11 @@
 # AI-Powered Minecraft Storytelling Server
 
+> **⚠️ EARLY ALPHA PREVIEW**
+> 
+> This project is currently in **active, early development**. While the core features are functional, you may encounter bugs, unexpected agent behaviors, or stability issues. 
+> 
+> The AI agents are autonomous and unpredictable. They might ignore you, get stuck, or accidentally burn down their own house. **Please report any issues or weird behaviors on the [Issues](https://github.com/Pomilon/MC-CIV/issues) page.** Your feedback is crucial to making this system smarter and more robust!
+
 An autonomous, multi-agent system designed to turn a Minecraft server into a living, breathing story. This project integrates high-level narrative AI with a swarm of LLM-driven agents (bots) that can explore, fight, build, and interact with players autonomously.
 
 ## 📖 Project Philosophy
@@ -17,6 +23,7 @@ Instead of rigid NPC scripts, this system uses Large Language Models (LLMs) to p
 
 ### 🤖 The Agent Swarm
 - **Hybrid Intelligence:** Combines LLM reasoning (Commanders) with programmed autonomous behaviors (Soldiers).
+- **Multi-Provider Support:** Plug-and-play support for **Google Gemini**, **OpenAI**, **Anthropic (Claude)**, **Groq**, and **Ollama**.
 - **Autonomous Modes:**
   - **PvP Mode:** Agents can autonomously hunt and fight targets using advanced combat logic (`mineflayer-pvp`).
   - **Exploration:** Agents can wander or follow specific targets autonomously.
@@ -36,7 +43,12 @@ Instead of rigid NPC scripts, this system uses Large Language Models (LLMs) to p
 - **Minecraft Java Edition** (Server version 1.16.5 - 1.20.x recommended).
 - **Python 3.12+**
 - **Node.js 18+**
-- An API Key for **Google Gemini** (Recommended, free tier available) or **OpenAI**.
+- An API Key for one of the following:
+  - **Google Gemini** (Recommended, free tier available)
+  - **OpenAI**
+  - **Anthropic**
+  - **Groq**
+  - **Ollama** (Local LLM)
 
 ### 🐳 Docker Quickstart (Recommended)
 
@@ -50,7 +62,7 @@ Instead of rigid NPC scripts, this system uses Large Language Models (LLMs) to p
    Copy `.env.example` to `.env` and add your API keys.
    ```bash
    cp .env.example .env
-   # Edit .env with your GEMINI_API_KEY
+   # Edit .env with your keys (GEMINI_API_KEY, ANTHROPIC_API_KEY, etc.)
    ```
 
 3. **Start the System:**
@@ -74,13 +86,38 @@ Instead of rigid NPC scripts, this system uses Large Language Models (LLMs) to p
    ```
 
 3. **Run the CLI:**
+   
+   **Run with Mock Mode (No Minecraft needed - great for testing):**
    ```bash
-   # Run with Mock server (no Minecraft needed, for testing)
-   python cli/main.py --mode mock
-
-   # Run with Real server
-   python cli/main.py --mode real --provider gemini --bots 2
+   python cli/main.py --mode mock --bots 1
    ```
+
+   **Run with Real Server:**
+   ```bash
+   # Gemini
+   python cli/main.py --mode real --provider gemini --bots 2
+
+   # Claude (Anthropic)
+   python cli/main.py --mode real --provider claude --bots 2
+
+   # Local Ollama
+   python cli/main.py --mode real --provider ollama --model llama3.1
+   ```
+
+## 🧪 Testing
+
+This project relies on a comprehensive test suite to ensure stability.
+
+**Run Python Unit Tests (Brain):**
+```bash
+python3 -m unittest discover tests
+```
+
+**Run Node.js Behavior Tests (Body):**
+```bash
+cd bot-client
+npm test
+```
 
 ## 🎮 Usage
 
@@ -103,10 +140,14 @@ Agents appear as players in the game. You can talk to them via in-game chat.
 
 ## 🤝 Contribution
 
-This project follows strict engineering principles:
-- **No Placeholders:** All features must be fully implemented.
-- **Test-Driven:** New features require unit tests.
-- **Modularity:** Keep the Brain (Python) and Body (Node.js) decoupled.
+Contributions are welcome! Since the project is in **Early Alpha**, bug reports are especially valuable.
+
+- **Found a bug?** Open an Issue with reproduction steps.
+- **Want to add a feature?** Fork the repo and submit a PR.
+- **Engineering Standards:**
+    - **No Placeholders:** All features must be fully implemented.
+    - **Test-Driven:** New features require unit tests.
+    - **Modularity:** Keep the Brain (Python) and Body (Node.js) decoupled.
 
 ## 📄 License
 
