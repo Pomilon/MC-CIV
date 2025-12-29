@@ -81,6 +81,7 @@ class MockRconClient:
     def __init__(self, host, port, password):
         self.host = host
         self.port = port
+        self.tick = 0
         logger.info("Initialized MockRconClient")
 
     def __enter__(self):
@@ -94,5 +95,6 @@ class MockRconClient:
         if "list" in command:
             return "There are 0 of a max of 20 players online: "
         elif "time" in command:
-            return "The time is 1000"
+            self.tick += 100
+            return f"The time is {self.tick}"
         return "Command executed"

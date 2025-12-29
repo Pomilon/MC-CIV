@@ -21,7 +21,7 @@ class TestV2Controller(unittest.TestCase):
         self.patcher_storage = patch('agents.controller.StorageManager')
         self.mock_storage_cls = self.patcher_storage.start()
         self.mock_storage = self.mock_storage_cls.return_value
-        self.mock_storage.load.return_value = ([], {}) # Memory, Locations
+        self.mock_storage.load.return_value = ([], {}, []) # Memory, Locations, LTM
         
         self.controller = AgentController("http://mock:3000", self.mock_llm, "Test Mission")
 

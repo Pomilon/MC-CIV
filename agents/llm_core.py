@@ -272,8 +272,14 @@ class OpenAILLM(LLMProvider):
 class MockLLM(LLMProvider):
 
     def generate_response(self, system_prompt: str, user_prompt: str, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
-
-        return {"action": "CHAT", "message": "Mock Response"}
+        actions = [
+            {"action": "CHAT", "message": "Simulating thought process..."},
+            {"action": "MOVE", "target": "100 64 100"},
+            {"action": "MINE", "block_name": "stone"},
+            {"action": "IDLE", "reason": "Contemplating existence"},
+            {"action": "INSPECT_ZONE", "c1": "0 60 0", "c2": "5 65 5"}
+        ]
+        return random.choice(actions)
 
 
 

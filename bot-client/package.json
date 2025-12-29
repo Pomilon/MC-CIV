@@ -4,7 +4,8 @@
   "description": "Mineflayer bot client for AI Storytelling Server",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node tests/test_behaviors.js"
   },
   "dependencies": {
     "body-parser": "^1.20.2",

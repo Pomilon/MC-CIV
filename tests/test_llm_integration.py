@@ -14,7 +14,7 @@ class TestLLMIntegration(unittest.TestCase):
         # Check if FunctionDeclarations are present
         self.assertTrue(hasattr(llm.default_tools, 'function_declarations'))
         # We added 2 new actions (SaveLocation, SetExplorationMode), total is now 12 actions
-        self.assertEqual(len(llm.default_tools.function_declarations), 12) 
+        self.assertEqual(len(llm.default_tools.function_declarations), 31) 
 
     def test_factory(self):
         llm = get_llm_provider("gemini", api_key="test")

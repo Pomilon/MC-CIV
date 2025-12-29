@@ -75,10 +75,11 @@ class AgentController:
         return ""
 
     def reason(self, observation, action_state):
-        chat_log = "\n".join([f"{c['username']}: {c['message']}" for c in observation.get('chat_history', [])])
+        chat_log = "\n".join([f"{c['username']}: {c['message']}" for c in observation.get('chat_history', [])][-10:])
         # Convert deque to list for slicing/iteration safety
         memory_str = "\n".join([f"- {m}" for m in list(self.memory)[-15:]]) 
-        long_term_str = "\n".join([f"- {m}" for m in self.long_term_memory])
+        # Limit long term memory to avoid token explosion
+        long_term_str = "\n".join([f"- {m}" for m in self.long_term_memory[-20:]])
         locations_str = ", ".join([f"{k}: {v}" for k, v in self.locations.items()])
         
         last_result = "None (Startup)"

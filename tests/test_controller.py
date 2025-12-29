@@ -23,12 +23,12 @@ class TestAgentController(unittest.TestCase):
         self.assertIsNotNone(obs)
         
         action = controller.reason(obs, action_state={})
-        self.assertEqual(action["action"], "CHAT")
+        self.assertIn("action", action)
         
         controller.act(action)
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
-        self.assertEqual(kwargs['json']['action'], "CHAT")
+        self.assertEqual(kwargs['json']['action'], action['action'])
 
 if __name__ == '__main__':
     unittest.main()

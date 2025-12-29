@@ -1,11 +1,6 @@
 {
   "memory": [
     "Command: {'resource': 'oak_log', 'count': 20.0, 'action': 'GATHER'}",
-    "Command: {'resource': 'birch_log', 'count': 20.0, 'action': 'GATHER'}",
-    "Command: {'resource': 'oak_log', 'count': 20.0, 'action': 'GATHER'}",
-    "Command: {'count': 80.0, 'item_name': 'oak_planks', 'action': 'CRAFT'}",
-    "Command: {'count': 60.0, 'item_name': 'oak_planks', 'action': 'CRAFT'}",
-    "Command: {'resource': 'oak_log', 'count': 20.0, 'action': 'GATHER'}",
     "Command: {'count': 192.0, 'item_name': 'oak_planks', 'action': 'CRAFT'}",
     "Command: {'dimensions': '5 4 5', 'shape': 'hollow_box', 'material': 'oak_planks', 'action': 'BUILD'}",
     "Command: {'dimensions': '5 1 5', 'shape': 'floor', 'material': 'oak_planks', 'action': 'BUILD'}",
@@ -14,7 +9,12 @@
     "Command: {'resource': 'oak_log', 'count': 20.0, 'action': 'GATHER'}",
     "Command: {'resource': 'oak_log', 'count': 20.0, 'action': 'GATHER'}",
     "Command: {'action': 'IDLE', 'reason': 'Max Retries Exceeded'}",
-    "Command: {'action': 'IDLE', 'reason': 'Max Retries Exceeded'}"
+    "Command: {'action': 'IDLE', 'reason': 'Max Retries Exceeded'}",
+    "Command: {'action': 'CHAT', 'message': 'Hi'}",
+    "Command: {'action': 'MINE', 'block_name': 'stone'}",
+    "Command: {'action': 'CHAT', 'message': 'Hi'}",
+    "Command: {'action': 'IDLE', 'reason': 'Contemplating existence'}",
+    "Command: {'action': 'CHAT', 'message': 'Hi'}"
   ],
   "locations": {},
   "long_term_memory": []
