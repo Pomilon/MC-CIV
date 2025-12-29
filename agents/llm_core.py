@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional
 import google.generativeai as genai
 from google.api_core.exceptions import ResourceExhausted
 from google.generativeai.types import FunctionDeclaration, Tool
-from openai import OpenAI
+from openai import OpenAI, AzureOpenAI
+import anthropic
 from pydantic import TypeAdapter, ValidationError
 from agents.grammar import (
     AgentAction, MoveAction, ChatAction, MineAction, CraftAction, EquipAction, IdleAction, 
@@ -31,6 +32,46 @@ ALL_ACTIONS = [
     SaveLocation, Remember, ExploreAction
 ]
 
+# Mapping from Class Name to Action String
+# This ensures we consistently inject the correct 'action' type even if the LLM omits the literal field.
+ACTION_MAPPING = {
+    "AttackAction": "SET_COMBAT_MODE",
+    "ExploreAction": "SET_EXPLORATION_MODE",
+    "MoveAction": "MOVE",
+    "ChatAction": "CHAT",
+    "MineAction": "MINE",
+    "GatherResource": "GATHER",
+    "HuntCreature": "HUNT",
+    "FindAndCollect": "COLLECT_ITEM",
+    "SmeltItem": "SMELT",
+    "ClearArea": "CLEAR_AREA",
+    "DepositToChest": "DEPOSIT",
+    "FarmLoop": "FARM",
+    "ConfigureBehavior": "CONFIGURE",
+    "CraftAction": "CRAFT",
+    "EquipAction": "EQUIP",
+    "IdleAction": "IDLE",
+    "StopAction": "STOP",
+    "BuildStructure": "BUILD",
+    "PlaceBlock": "PLACE_BLOCK",
+    "InspectZone": "INSPECT_ZONE",
+    "ManageInventory": "INVENTORY",
+    "InteractAction": "INTERACT",
+    "BreakBlock": "BREAK_BLOCK",
+    "ThrowItem": "THROW_ITEM",
+    "UseItem": "USE_ITEM",
+    "MountEntity": "MOUNT",
+    "DismountEntity": "DISMOUNT",
+    "Sleep": "SLEEP",
+    "Wake": "WAKE",
+    "SaveLocation": "SAVE_LOCATION",
+    "Remember": "REMEMBER",
+    "BroadcastEvent": "BROADCAST",
+    "SpawnEvent": "SPAWN",
+    "WeatherEvent": "WEATHER",
+    "WaitEvent": "WAIT"
+}
+
 class LLMProvider(ABC):
     @abstractmethod
     def generate_response(self, system_prompt: str, user_prompt: str, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
@@ -38,6 +79,12 @@ class LLMProvider(ABC):
         Generates a response from the LLM.
         """
         pass
+
+    def _map_tool_response(self, function_name: str, args: dict) -> dict:
+        """Helper to inject the correct action string based on the function name."""
+        if function_name in ACTION_MAPPING:
+            args["action"] = ACTION_MAPPING[function_name]
+        return args
 
 def pydantic_to_gemini_tool(model):
     schema = model.model_json_schema()
@@ -67,7 +114,7 @@ def pydantic_to_gemini_tool(model):
     )
 
 class GeminiLLM(LLMProvider):
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash"):
         # Support multiple keys via comma-separated string
         keys_str = os.getenv("GEMINI_API_KEYS", "")
         self.api_keys = [k.strip() for k in keys_str.split(',') if k.strip()]
@@ -86,7 +133,6 @@ class GeminiLLM(LLMProvider):
         
         # Default Agent Tools
         self.default_tools = Tool(function_declarations=[pydantic_to_gemini_tool(m) for m in ALL_ACTIONS])
-        self.tools = self.default_tools
 
     def _get_current_key(self):
         if not self.api_keys:
@@ -127,58 +173,17 @@ class GeminiLLM(LLMProvider):
                         fc = part.function_call
                         args = dict(fc.args)
                         name = fc.name
-                        
-                        # Mapping logic
-                        if name == "AttackAction": args["action"] = "SET_COMBAT_MODE"
-                        elif name == "ExploreAction": args["action"] = "SET_EXPLORATION_MODE"
-                        elif name == "MoveAction": args["action"] = "MOVE"
-                        elif name == "ChatAction": args["action"] = "CHAT"
-                        elif name == "MineAction": args["action"] = "MINE"
-                        elif name == "GatherResource": args["action"] = "GATHER"
-                        elif name == "HuntCreature": args["action"] = "HUNT"
-                        elif name == "FindAndCollect": args["action"] = "COLLECT_ITEM"
-                        elif name == "SmeltItem": args["action"] = "SMELT"
-                        elif name == "ClearArea": args["action"] = "CLEAR_AREA"
-                        elif name == "DepositToChest": args["action"] = "DEPOSIT"
-                        elif name == "FarmLoop": args["action"] = "FARM"
-                        elif name == "ConfigureBehavior": args["action"] = "CONFIGURE"
-                        elif name == "CraftAction": args["action"] = "CRAFT"
-                        elif name == "EquipAction": args["action"] = "EQUIP"
-                        elif name == "IdleAction": args["action"] = "IDLE"
-                        elif name == "StopAction": args["action"] = "STOP"
-                        elif name == "BuildStructure": args["action"] = "BUILD"
-                        elif name == "PlaceBlock": args["action"] = "PLACE_BLOCK"
-                        elif name == "InspectZone": args["action"] = "INSPECT_ZONE"
-                        elif name == "ManageInventory": args["action"] = "INVENTORY"
-                        elif name == "InteractAction": args["action"] = "INTERACT"
-                        elif name == "BreakBlock": args["action"] = "BREAK_BLOCK"
-                        elif name == "ThrowItem": args["action"] = "THROW_ITEM"
-                        elif name == "UseItem": args["action"] = "USE_ITEM"
-                        elif name == "MountEntity": args["action"] = "MOUNT"
-                        elif name == "DismountEntity": args["action"] = "DISMOUNT"
-                        elif name == "Sleep": args["action"] = "SLEEP"
-                        elif name == "Wake": args["action"] = "WAKE"
-                        elif name == "SaveLocation": args["action"] = "SAVE_LOCATION"
-                        elif name == "Remember": args["action"] = "REMEMBER"
-                        
-                        # Narrator
-                        elif name == "BroadcastEvent": args["action"] = "BROADCAST"
-                        elif name == "SpawnEvent": args["action"] = "SPAWN"
-                        elif name == "WeatherEvent": args["action"] = "WEATHER"
-                        elif name == "WaitEvent": args["action"] = "WAIT"
-
-                        return args
+                        return self._map_tool_response(name, args)
                 
                 return {"action": "IDLE", "reason": "No tool called"}
 
             except ResourceExhausted:
                 logger.warning(f"Gemini Quota Exceeded on key ...{current_key[-4:]}. Rotating...")
                 self._rotate_key()
-                # If we have rotated back to start or just have 1 key, we must sleep
                 time.sleep(base_delay * (attempt + 1))
             except Exception as e:
                 logger.error(f"Gemini API Error: {e}")
-                if "429" in str(e): # Handle generic 429 if not caught by ResourceExhausted
+                if "429" in str(e): 
                     self._rotate_key()
                     time.sleep(base_delay * (attempt + 1))
                 else:
@@ -187,17 +192,19 @@ class GeminiLLM(LLMProvider):
         return {"action": "IDLE", "reason": "Max Retries Exceeded"}
 
 class OpenAILLM(LLMProvider):
-    def __init__(self, api_key: str = None, model_name: str = "gpt-4o"):
+    def __init__(self, api_key: str = None, base_url: str = None, model_name: str = "gpt-4o"):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.client = OpenAI(api_key=self.api_key) if self.api_key else None
-        self.model_name = model_name
+        self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
         
+        if not self.api_key:
+             # Some local providers (like Ollama) don't strictly need a key, but library might require one.
+             self.api_key = "dummy" 
+             
+        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.model_name = model_name
         self.action_models = ALL_ACTIONS
 
     def generate_response(self, system_prompt: str, user_prompt: str, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
-        if not self.client:
-             return {"action": "IDLE", "reason": "Missing API Key"}
-
         active_models = tools if tools else self.action_models
         
         openai_tools = []
@@ -230,38 +237,7 @@ class OpenAILLM(LLMProvider):
                 tool_call = message.tool_calls[0]
                 action_name = tool_call.function.name
                 args = json.loads(tool_call.function.arguments)
-                
-                # Manual Mapping (Same as Gemini)
-                if action_name == "AttackAction": args["action"] = "SET_COMBAT_MODE"
-                elif action_name == "ExploreAction": args["action"] = "SET_EXPLORATION_MODE"
-                elif action_name == "MoveAction": args["action"] = "MOVE"
-                elif action_name == "ChatAction": args["action"] = "CHAT"
-                elif action_name == "MineAction": args["action"] = "MINE"
-                elif action_name == "CraftAction": args["action"] = "CRAFT"
-                elif action_name == "EquipAction": args["action"] = "EQUIP"
-                elif action_name == "IdleAction": args["action"] = "IDLE"
-                elif action_name == "StopAction": args["action"] = "STOP"
-                elif action_name == "BuildStructure": args["action"] = "BUILD"
-                elif action_name == "PlaceBlock": args["action"] = "PLACE_BLOCK"
-                elif action_name == "InspectZone": args["action"] = "INSPECT_ZONE"
-                elif action_name == "ManageInventory": args["action"] = "INVENTORY"
-                elif action_name == "InteractAction": args["action"] = "INTERACT"
-                elif action_name == "BreakBlock": args["action"] = "BREAK_BLOCK"
-                elif action_name == "ThrowItem": args["action"] = "THROW_ITEM"
-                elif action_name == "UseItem": args["action"] = "USE_ITEM"
-                elif action_name == "MountEntity": args["action"] = "MOUNT"
-                elif action_name == "DismountEntity": args["action"] = "DISMOUNT"
-                elif action_name == "Sleep": args["action"] = "SLEEP"
-                elif action_name == "Wake": args["action"] = "WAKE"
-                elif action_name == "SaveLocation": args["action"] = "SAVE_LOCATION"
-                elif action_name == "Remember": args["action"] = "REMEMBER"
-                
-                elif action_name == "BroadcastEvent": args["action"] = "BROADCAST"
-                elif action_name == "SpawnEvent": args["action"] = "SPAWN"
-                elif action_name == "WeatherEvent": args["action"] = "WEATHER"
-                elif action_name == "WaitEvent": args["action"] = "WAIT"
-
-                return args
+                return self._map_tool_response(action_name, args)
             
             return {"action": "IDLE", "reason": "No tool called"}
 
@@ -269,8 +245,55 @@ class OpenAILLM(LLMProvider):
             logger.error(f"OpenAI API Error: {e}")
             return {"action": "IDLE", "reason": str(e)}
 
-class MockLLM(LLMProvider):
+class AnthropicLLM(LLMProvider):
+    def __init__(self, api_key: str = None, model_name: str = "claude-3-5-sonnet-20241022"):
+        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        self.client = anthropic.Anthropic(api_key=self.api_key) if self.api_key else None
+        self.model_name = model_name
+        self.action_models = ALL_ACTIONS
 
+    def generate_response(self, system_prompt: str, user_prompt: str, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
+        if not self.client:
+             return {"action": "IDLE", "reason": "Missing API Key"}
+
+        active_models = tools if tools else self.action_models
+        
+        claude_tools = []
+        for model in active_models:
+            schema = model.model_json_schema()
+            claude_tools.append({
+                "name": model.__name__,
+                "description": f"Perform a {model.__name__}",
+                "input_schema": schema
+            })
+
+        try:
+            response = self.client.messages.create(
+                model=self.model_name,
+                max_tokens=1024,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": user_prompt}
+                ],
+                tools=claude_tools
+            )
+
+            # Anthropic stop_reason for tools is 'tool_use'
+            if response.stop_reason == "tool_use":
+                # Find the tool use block
+                for content in response.content:
+                    if content.type == "tool_use":
+                        action_name = content.name
+                        args = content.input
+                        return self._map_tool_response(action_name, args)
+            
+            return {"action": "IDLE", "reason": "No tool called"}
+
+        except Exception as e:
+            logger.error(f"Anthropic API Error: {e}")
+            return {"action": "IDLE", "reason": str(e)}
+
+class MockLLM(LLMProvider):
     def generate_response(self, system_prompt: str, user_prompt: str, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
         actions = [
             {"action": "CHAT", "message": "Simulating thought process..."},
@@ -281,39 +304,34 @@ class MockLLM(LLMProvider):
         ]
         return random.choice(actions)
 
-
-
-class OllamaLLM(OpenAILLM):
-    """
-    Ollama implementation using the OpenAI-compatible API.
-    """
-    def __init__(self, base_url: str = None, model_name: str = "llama3.1", **kwargs):
-        self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-        self.api_key = "ollama" # Required dummy key
-        self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
-        self.model_name = model_name
-        
-        self.action_models = ALL_ACTIONS
-
-class LlamaCppLLM(OpenAILLM):
-    """
-    Llama.cpp server implementation using the OpenAI-compatible API.
-    """
-    def __init__(self, base_url: str = None, model_name: str = "default", **kwargs):
-        self.base_url = base_url or os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1")
-        self.api_key = "llamacpp" # Required dummy key
-        self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
-        self.model_name = model_name
-        
-        self.action_models = ALL_ACTIONS
-
 def get_llm_provider(provider_name: str, **kwargs) -> LLMProvider:
-    if provider_name.lower() == "gemini":
+    provider_name = provider_name.lower()
+    
+    if provider_name == "gemini":
         return GeminiLLM(**kwargs)
-    elif provider_name.lower() == "openai":
+    elif provider_name == "openai":
         return OpenAILLM(**kwargs)
-    elif provider_name.lower() == "ollama":
-        return OllamaLLM(**kwargs)
-    elif provider_name.lower() == "llamacpp":
-        return LlamaCppLLM(**kwargs)
+    elif provider_name == "anthropic" or provider_name == "claude":
+        return AnthropicLLM(**kwargs)
+    elif provider_name == "ollama":
+        # Defaults for Ollama
+        if "base_url" not in kwargs:
+            kwargs["base_url"] = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        if "model_name" not in kwargs:
+            kwargs["model_name"] = "llama3.1"
+        return OpenAILLM(**kwargs)
+    elif provider_name == "llamacpp":
+        # Defaults for LlamaCpp
+        if "base_url" not in kwargs:
+            kwargs["base_url"] = os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1")
+        if "model_name" not in kwargs:
+            kwargs["model_name"] = "default"
+        return OpenAILLM(**kwargs)
+    elif provider_name == "groq":
+        if "base_url" not in kwargs:
+            kwargs["base_url"] = "https://api.groq.com/openai/v1"
+        if "model_name" not in kwargs:
+            kwargs["model_name"] = "llama3-70b-8192"
+        return OpenAILLM(**kwargs)
+        
     return MockLLM()
