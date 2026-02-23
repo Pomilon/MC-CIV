@@ -1,34 +1,58 @@
-import unittest
-from unittest.mock import MagicMock, patch
+import pytest
+import asyncio
+from unittest.mock import MagicMock, AsyncMock, patch
 from agents.controller import AgentController
 from agents.llm_core import MockLLM
 
-class TestAgentController(unittest.TestCase):
-    @patch('requests.get')
-    @patch('requests.post')
-    def test_loop_step(self, mock_post, mock_get):
-        # Mock Observation
-        mock_get.return_value.status_code = 200
-        mock_get.return_value.json.return_value = {
-            "name": "Bot1",
-            "health": 20,
-            "position": {"x": 100, "y": 64, "z": 100}
-        }
-
+class TestAgentController:
+    @pytest.fixture
+    def controller(self):
         llm = MockLLM()
-        controller = AgentController("http://localhost:3000", llm, "Survive")
-        
-        # Run one step manually
-        obs = controller.observe()
-        self.assertIsNotNone(obs)
-        
-        action = controller.reason(obs, action_state={})
-        self.assertIn("action", action)
-        
-        controller.act(action)
-        mock_post.assert_called_once()
-        args, kwargs = mock_post.call_args
-        self.assertEqual(kwargs['json']['action'], action['action'])
+        with patch('agents.controller.StorageManager') as MockStorage:
+            # Mock load return values
+            instance = MockStorage.return_value
+            instance.load.return_value = ([], {}, [])
+            
+            ctrl = AgentController("Bot1", "Survive", llm)
+            ctrl.websocket = AsyncMock()
+            return ctrl
 
-if __name__ == '__main__':
-    unittest.main()
+    @pytest.mark.asyncio
+    async def test_connect(self, controller):
+        ws = AsyncMock()
+        await controller.connect(ws)
+        assert controller.websocket == ws
+
+    @pytest.mark.asyncio
+    async def test_handle_observation(self, controller):
+        controller.websocket = AsyncMock()
+        
+        observation = {
+            "type": "observation",
+            "data": {
+                "name": "Bot1",
+                "health": 20,
+                "position": {"x": 100, "y": 64, "z": 100},
+                "chat_history": [],
+                "action_state": {"status": "idle"}
+            }
+        }
+        
+        await controller.handle_message(observation)
+        
+        # Expect send_command called because MockLLM returns an action
+        assert controller.websocket.send_json.called
+        assert controller.state == "EXECUTING"
+
+    @pytest.mark.asyncio
+    async def test_handle_action_update(self, controller):
+        update = {
+            "type": "action_update",
+            "data": {
+                "status": "completed",
+                "endSignal": "Done"
+            }
+        }
+        
+        await controller.handle_message(update)
+        assert controller.state == "IDLE"

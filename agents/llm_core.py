@@ -295,16 +295,36 @@ class AnthropicLLM(LLMProvider):
 
 class MockLLM(LLMProvider):
     def generate_response(self, system_prompt: str, user_prompt: str, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
+        user_prompt_lower = user_prompt.lower()
+        
+        if "build a house" in system_prompt.lower() or "build" in user_prompt_lower:
+            return {
+                "action": "BUILD",
+                "shape": "cube",
+                "material": "planks",
+                "dimensions": "3 3 3",
+                "location": "near_me"
+            }
+        
+        if "explore" in user_prompt_lower:
+             return {"action": "SET_EXPLORATION_MODE", "mode": "wander"}
+             
+        if "fight" in user_prompt_lower:
+            return {"action": "SET_COMBAT_MODE", "mode": "pvp", "target": "Zombie"}
+
         actions = [
-            {"action": "CHAT", "message": "Simulating thought process..."},
+            {"action": "CHAT", "message": "I am operating in MOCK MODE."},
             {"action": "MOVE", "target": "100 64 100"},
             {"action": "MINE", "block_name": "stone"},
-            {"action": "IDLE", "reason": "Contemplating existence"},
-            {"action": "INSPECT_ZONE", "c1": "0 60 0", "c2": "5 65 5"}
+            {"action": "IDLE", "reason": "Simulated wait"},
         ]
         return random.choice(actions)
 
 def get_llm_provider(provider_name: str, **kwargs) -> LLMProvider:
+    if os.getenv("MOCK_MODE", "").lower() == "true":
+        logger.info("MOCK_MODE enabled. Forcing MockLLM.")
+        return MockLLM()
+
     provider_name = provider_name.lower()
     
     if provider_name == "gemini":

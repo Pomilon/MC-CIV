@@ -1,12 +1,12 @@
 import argparse
-import subprocess
+import asyncio
 import os
 import sys
-import time
 import socket
 import logging
 import signal
-from agents.controller import AgentController
+import uvicorn
+from agents.controller import AgentController, create_app
 from agents.llm_core import get_llm_provider
 
 # Configure logging
@@ -25,82 +25,76 @@ class AgentProcess:
         self.provider = provider
         self.model_name = model_name
         self.profile_path = profile_path
-        self.node_process = None
-        self.controller = None
         self.port = find_free_port()
+        self.node_process = None
 
-    def start_node_bot(self):
+    async def start_node_bot(self):
         env = os.environ.copy()
         env["MC_USERNAME"] = self.bot_id
         env["MISSION"] = self.mission
         env["PORT"] = str(self.port)
+        # Pass MOCK_MODE if set globally
         
         logger.info(f"Spawning Node.js bot {self.bot_id} on port {self.port}...")
         
-        self.node_process = subprocess.Popen(
-            ["node", "index.js"],
+        # Use asyncio subprocess
+        self.node_process = await asyncio.create_subprocess_exec(
+            "node", "index.js",
             cwd="bot-client",
             env=env,
             stdout=sys.stdout, 
-            stderr=sys.stderr,
-            text=True
+            stderr=sys.stderr
         )
 
-    def wait_for_node_server(self, timeout=20):
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            try:
-                with socket.create_connection(("localhost", self.port), timeout=1):
-                    return True
-            except (ConnectionRefusedError, socket.timeout, OSError):
-                time.sleep(0.5)
-        return False
-
-    def run(self):
-        # 1. Start Node Bot
-        self.start_node_bot()
-        
-        # 2. Wait for it to be ready
-        if not self.wait_for_node_server():
-            logger.error("Node bot failed to start API server.")
-            self.shutdown()
-            sys.exit(1)
-
-        # 3. Initialize Controller
-        logger.info(f"Node bot ready. Initializing Controller for {self.bot_id}...")
+    async def run(self):
+        # 1. Initialize Controller
+        logger.info(f"Initializing Controller for {self.bot_id}...")
         
         llm_kwargs = {}
         if self.model_name:
             llm_kwargs["model_name"] = self.model_name
             
         llm = get_llm_provider(self.provider, **llm_kwargs)
-        self.controller = AgentController(
-            f"http://localhost:{self.port}", 
-            llm, 
-            self.mission, 
+        
+        controller = AgentController(
             self.bot_id, 
+            self.mission,
+            llm, 
             profile_path=self.profile_path
         )
-
-        # 4. Run Controller Loop
-        # The controller loop is now the main thread of this process.
+        
+        app = create_app(controller)
+        
+        # 2. Start Uvicorn Server
+        config = uvicorn.Config(app, host="0.0.0.0", port=self.port, log_level="info")
+        server = uvicorn.Server(config)
+        
+        # Run server in background task
+        server_task = asyncio.create_task(server.serve())
+        
+        # 3. Start Node Bot (after a brief delay to ensure server is up)
+        await asyncio.sleep(2)
+        await self.start_node_bot()
+        
+        # 4. Wait for Node Bot to finish (or crash)
         try:
-            self.controller.run_loop()
-        except KeyboardInterrupt:
-            logger.info("Agent process interrupted.")
-        except Exception as e:
-            logger.error(f"Agent process crashed: {e}")
+            await self.node_process.wait()
+        except asyncio.CancelledError:
+            logger.info("Agent process cancelled.")
         finally:
-            self.shutdown()
+            if self.node_process:
+                try:
+                    self.node_process.terminate()
+                    await self.node_process.wait()
+                except ProcessLookupError:
+                    pass
+            # Stop server
+            server.should_exit = True
+            await server_task
 
     def shutdown(self):
-        logger.info("Shutting down agent process...")
-        if self.node_process:
-            self.node_process.terminate()
-            try:
-                self.node_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.node_process.kill()
+        # This is handled by asyncio cancellation in run() mostly
+        pass
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -113,11 +107,7 @@ if __name__ == "__main__":
 
     agent = AgentProcess(args.bot_id, args.mission, args.provider, args.model, args.profile)
     
-    # Handle signals to ensure child process cleanup
-    def signal_handler(sig, frame):
-        agent.shutdown()
-        sys.exit(0)
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    agent.run()
+    try:
+        asyncio.run(agent.run())
+    except KeyboardInterrupt:
+        pass

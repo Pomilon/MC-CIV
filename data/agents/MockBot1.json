@@ -1,0 +1,21 @@
+{
+  "memory": [
+    "Command: {'action': 'MINE', 'block_name': 'stone'}",
+    "Command: {'action': 'MINE', 'block_name': 'stone'}",
+    "Command: {'action': 'MOVE', 'target': '100 64 100'}",
+    "Command: {'action': 'MOVE', 'target': '100 64 100'}",
+    "Command: {'action': 'MOVE', 'target': '100 64 100'}",
+    "Command: {'action': 'IDLE', 'reason': 'Simulated wait'}",
+    "Command: {'action': 'MOVE', 'target': '100 64 100'}",
+    "Command: {'action': 'IDLE', 'reason': 'Simulated wait'}",
+    "Command: {'action': 'IDLE', 'reason': 'Simulated wait'}",
+    "Command: {'action': 'MOVE', 'target': '100 64 100'}",
+    "Command: {'action': 'MINE', 'block_name': 'stone'}",
+    "Command: {'action': 'IDLE', 'reason': 'Simulated wait'}",
+    "Command: {'action': 'MOVE', 'target': '100 64 100'}",
+    "Command: {'action': 'MINE', 'block_name': 'stone'}",
+    "Command: {'action': 'CHAT', 'message': 'I am operating in MOCK MODE.'}"
+  ],
+  "locations": {},
+  "long_term_memory": []
+}

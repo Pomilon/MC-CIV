@@ -1,22 +1,28 @@
-import time
-import requests
-import logging
+import asyncio
 import json
+import logging
 import os
 from collections import deque
-from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
+from typing import Dict, Any, Optional
+import websockets
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from agents.llm_core import LLMProvider
 from agents.storage import StorageManager
 
 logger = logging.getLogger(__name__)
 
 class AgentController:
-    def __init__(self, bot_url: str, llm: LLMProvider, mission: str, bot_id: str = "Bot1", profile_path: str = None):
-        self.bot_url = bot_url
-        self.llm = llm
-        self.mission = mission
+    def __init__(self, bot_id: str, mission: str, llm: LLMProvider, profile_path: str = None):
         self.bot_id = bot_id
-        self.current_action_id = None
+        self.mission = mission
+        self.llm = llm
+        
+        # State
+        self.state = "IDLE" # IDLE, PLANNING, EXECUTING
+        self.latest_observation = None
+        self.action_state = {"status": "idle"}
+        self.websocket: Optional[WebSocket] = None
         
         # Load Profile
         self.profile = {}
@@ -28,7 +34,6 @@ class AgentController:
             except Exception as e:
                 logger.error(f"Failed to load profile: {e}")
         
-        # Fallback if profile missing
         if not self.profile:
             base_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'profiles', 'base.json')
             if os.path.exists(base_path):
@@ -45,16 +50,62 @@ class AgentController:
         self.storage = StorageManager(bot_id)
         self.memory, self.locations, self.long_term_memory = self.storage.load()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(1), retry=retry_if_exception_type(requests.RequestException))
-    def observe(self):
-        try:
-            response = requests.get(f"{self.bot_url}/observe", timeout=2)
-            if response.status_code == 200:
-                return response.json()
-        except requests.RequestException as e:
-            logger.warning(f"Observe failed (retrying): {e}")
-            raise e
-        return None
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.websocket = websocket
+        logger.info(f"Bot {self.bot_id} connected via WebSocket.")
+
+    async def disconnect(self):
+        self.websocket = None
+        logger.info(f"Bot {self.bot_id} disconnected.")
+
+    async def handle_message(self, data: Dict[str, Any]):
+        msg_type = data.get("type")
+        payload = data.get("data")
+
+        if msg_type == "connect":
+            logger.info(f"Bot Handshake: {payload}")
+            
+        elif msg_type == "observation":
+            self.latest_observation = payload
+            await self.process_observation()
+
+        elif msg_type == "action_update":
+            self.action_state = payload
+            logger.info(f"Action Update: {payload['status']} - {payload.get('endSignal')}")
+            if payload['status'] in ['completed', 'failed']:
+                self.state = "IDLE"
+                # Trigger re-evaluation immediately or wait for next observation
+                # We'll wait for next observation to keep it simple and paced
+                
+        elif msg_type == "chat":
+            logger.info(f"Chat: {payload['username']}: {payload['message']}")
+
+    async def send_command(self, action: Dict[str, Any]):
+        if self.websocket:
+            await self.websocket.send_json({"type": "command", "data": action})
+            self.state = "EXECUTING"
+
+    async def dashboard_reporter(self):
+        # Allow configuring dashboard URL via env
+        dashboard_host = os.getenv("DASHBOARD_HOST", "localhost")
+        dashboard_port = os.getenv("DASHBOARD_PORT", "8000")
+        uri = f"ws://{dashboard_host}:{dashboard_port}/ws/agent/{self.bot_id}"
+        
+        while True:
+            try:
+                async with websockets.connect(uri) as websocket:
+                    logger.info(f"Connected to Dashboard as {self.bot_id}")
+                    while True:
+                        if self.latest_observation:
+                            # Enrich observation with current internal state
+                            data = self.latest_observation.copy()
+                            data['internal_state'] = self.state
+                            await websocket.send(json.dumps(data))
+                        await asyncio.sleep(2) 
+            except Exception as e:
+                # logger.warning(f"Dashboard connection failed: {e}")
+                await asyncio.sleep(5)
 
     def _get_feedback_hint(self, error):
         error = str(error).lower()
@@ -66,59 +117,87 @@ class AgentController:
             return " -> HINT: The entity is not nearby. Use SET_EXPLORATION_MODE to find it."
         if "nopath" in error or "unreachable" in error:
             return " -> HINT: The bot cannot reach the target. It might be blocked. Try clearing the way or moving closer."
-        if "recipe" in error:
-            return " -> HINT: You are missing resources or the recipe does not exist. Check requirements."
-        if "dimensions" in error:
-            return " -> HINT: Dimensions must be 'W H D' (integers)."
-        if "unknown item" in error or "unknown block" in error:
-            return " -> HINT: The item/block name might be misspelled or invalid. Check the name."
         return ""
 
-    def reason(self, observation, action_state):
+    async def process_observation(self):
+        if self.state == "EXECUTING":
+            # If we are executing, we check if the action is still running.
+            # The 'action_state' update should handle the transition back to IDLE.
+            # But just in case, we can check the observation's action_state too.
+            obs_action_state = self.latest_observation.get("action_state", {})
+            if obs_action_state.get("status") in ["completed", "failed"]:
+                self.state = "IDLE"
+            else:
+                return # Still busy
+
+        if self.state == "PLANNING":
+            return # Already thinking
+
+        # State is IDLE, let's reason
+        self.state = "PLANNING"
+        
+        try:
+            action = await asyncio.to_thread(self.reason, self.latest_observation)
+            if action:
+                if action.get("action") in ["SAVE_LOCATION", "REMEMBER"]:
+                    # Internal actions
+                    self.handle_internal_action(action)
+                    self.state = "IDLE"
+                else:
+                    await self.send_command(action)
+            else:
+                self.state = "IDLE"
+        except Exception as e:
+            logger.error(f"Reasoning Error: {e}")
+            self.state = "IDLE"
+
+    def handle_internal_action(self, action):
+        if action.get("action") == 'SAVE_LOCATION':
+             p = self.latest_observation.get('position')
+             if p:
+                coords = f"{int(p['x'])} {int(p['y'])} {int(p['z'])}"
+                name = action.get('name')
+                self.locations[name] = coords
+                self.memory.append(f"Saved location '{name}' at {coords}")
+                self.storage.save(self.memory, self.locations, self.long_term_memory)
+
+        elif action.get("action") == 'REMEMBER':
+            fact = action.get('fact')
+            if fact:
+                self.long_term_memory.append(fact)
+                self.memory.append(f"Remembered: {fact}")
+                self.storage.save(self.memory, self.locations, self.long_term_memory)
+
+    def reason(self, observation):
         chat_log = "\n".join([f"{c['username']}: {c['message']}" for c in observation.get('chat_history', [])][-10:])
-        # Convert deque to list for slicing/iteration safety
         memory_str = "\n".join([f"- {m}" for m in list(self.memory)[-15:]]) 
-        # Limit long term memory to avoid token explosion
         long_term_str = "\n".join([f"- {m}" for m in self.long_term_memory[-20:]])
         locations_str = ", ".join([f"{k}: {v}" for k, v in self.locations.items()])
         
         last_result = "None (Startup)"
-        if action_state:
-            status = action_state.get('status')
-            signal = action_state.get('endSignal')
-            error = action_state.get('error')
-            data = action_state.get('data')
-            
-            if status == 'completed':
-                if signal == "ZoneInspected" and data:
-                    # Format as slices
-                    origin = data.get('origin', {})
-                    layers = data.get('layers', [])
-                    
-                    viz_lines = [f"ZONE INSPECTION (Origin: {origin.get('x')}, {origin.get('y')}, {origin.get('z')}):"]
-                    
-                    for y, layer in enumerate(layers):
-                        abs_y = origin.get('y', 0) + y
-                        viz_lines.append(f"--- Layer Y+{y} (Abs {abs_y}) ---")
-                        for z, row in enumerate(layer):
-                            row_str = ", ".join(row)
-                            viz_lines.append(f"Z+{z}: [{row_str}]")
-                            
-                    last_result = "\n".join(viz_lines)
-                else:
-                    last_result = f"SUCCESS: {signal}"
-            elif status == 'failed':
-                hint = self._get_feedback_hint(error)
-                last_result = f"FAILURE: {error} (Partial: {signal}){hint}"
-            elif status == 'idle':
-                last_result = "IDLE"
+        # Use the latest action state from observation or our internal tracker
+        action_state = observation.get('action_state', self.action_state)
+        
+        status = action_state.get('status')
+        signal = action_state.get('endSignal')
+        error = action_state.get('error')
+        data = action_state.get('data')
+        
+        if status == 'completed':
+            if signal == "ZoneInspected" and data:
+                 last_result = f"INSPECT RESULT: {len(data)} blocks found." # Simplified
+            else:
+                last_result = f"SUCCESS: {signal}"
+        elif status == 'failed':
+            hint = self._get_feedback_hint(error)
+            last_result = f"FAILURE: {error} (Partial: {signal}){hint}"
+        elif status == 'idle':
+            last_result = "IDLE"
 
-        # Construct System Prompt from Profile
         template = self.profile.get("system_template", "")
         persona = self.profile.get("persona", "You are a Minecraft Bot.")
         command_docs = self.profile.get("command_docs", "Use available tools.")
         
-        # Safe format
         system_prompt = template.format(
             persona=persona,
             mission=self.mission,
@@ -135,6 +214,7 @@ class AgentController:
         - Inventory: {observation.get('inventory')}
         - Nearby Entities: {observation.get('nearby_entities')}
         - Nearby Blocks: {observation.get('nearby_blocks')}
+        - Time: {observation.get('time')}
         
         RECENT CHAT:
         {chat_log}
@@ -149,102 +229,36 @@ class AgentController:
         """
         
         action_dict = self.llm.generate_response(system_prompt, user_prompt)
-        return action_dict
-
-    def act(self, action_dict):
-        logger.info(f"Agent Command: {action_dict}")
         
-        action_type = action_dict.get('action')
-        
-        # Handle Local Memory Actions
-        if action_type == 'SAVE_LOCATION':
-            # We need current position.
-            try:
-                obs = self.observe()
-                if obs and 'position' in obs:
-                    p = obs['position']
-                    coords = f"{int(p['x'])} {int(p['y'])} {int(p['z'])}"
-                    name = action_dict.get('name')
-                    self.locations[name] = coords
-                    self.memory.append(f"Saved location '{name}' at {coords}")
-                    self.storage.save(self.memory, self.locations, self.long_term_memory)
-            except:
-                pass
-            return None # No bot action needed
-
-        if action_type == 'REMEMBER':
-            fact = action_dict.get('fact')
-            if fact:
-                self.long_term_memory.append(fact)
-                self.memory.append(f"Remembered: {fact}")
-                self.storage.save(self.memory, self.locations, self.long_term_memory)
-            return None
-
-        # Resolve Targets
-        if action_type == 'MOVE':
+        # Post-processing
+        if action_dict.get('action') == 'MOVE':
             target = action_dict.get('target')
             if target in self.locations:
                 action_dict['target'] = self.locations[target]
-
+                
         self.memory.append(f"Command: {action_dict}")
         self.storage.save(self.memory, self.locations, self.long_term_memory)
         
+        return action_dict
+
+def create_app(controller: AgentController):
+    app = FastAPI()
+
+    @app.on_event("startup")
+    async def startup_event():
+        asyncio.create_task(controller.dashboard_reporter())
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket):
+        await controller.connect(websocket)
         try:
-            return self._send_command(action_dict)
+            while True:
+                data = await websocket.receive_json()
+                await controller.handle_message(data)
+        except WebSocketDisconnect:
+            await controller.disconnect()
         except Exception as e:
-            logger.error(f"Failed to act: {e}")
-            return None
-
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(1), retry=retry_if_exception_type(requests.RequestException))
-    def _send_command(self, action_dict):
-        response = requests.post(f"{self.bot_url}/act", json=action_dict, timeout=5)
-        if response.status_code == 200:
-            res_data = response.json()
-            return res_data.get('action_id')
-        return None
-
-    def observe_safe(self):
-        try:
-            return self.observe()
-        except Exception:
-            return None
-
-    def observe_safe(self):
-        try:
-            return self.observe()
-        except Exception:
-            return None
-
-    def run_loop(self, interval=5):
-        logger.info(f"Starting Agent Loop for mission: {self.mission}")
-        while True:
-            try:
-                obs = self.observe_safe()
-                if obs:
-                    action_state = obs.get('action_state', {})
-                    status = action_state.get('status', 'idle')
-                    
-                    if status == 'running':
-                        # Action is still running, wait.
-                        pass
-                    else:
-                        try:
-                            action = self.reason(obs, action_state)
-                            if action:
-                                new_id = self.act(action)
-                                if new_id:
-                                    self.current_action_id = new_id
-                                    time.sleep(0.5) 
-                        except Exception as e:
-                            logger.error(f"Reasoning/Acting Error: {e}")
-                            # Prevent hot-looping on error
-                            time.sleep(2)
-                else:
-                    logger.warning("Bot unavailable (Booting or Disconnected)... waiting.")
-                    time.sleep(5) # Wait longer if bot is down
-                    
-            except Exception as e:
-                logger.critical(f"Critical Error in Agent Loop: {e}")
-                time.sleep(5)
+            logger.error(f"WebSocket Error: {e}")
+            await controller.disconnect()
             
-            time.sleep(interval)
+    return app
