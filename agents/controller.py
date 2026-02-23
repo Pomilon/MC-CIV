@@ -5,6 +5,8 @@ import os
 from collections import deque
 from typing import Dict, Any, Optional
 import websockets
+import requests
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from agents.llm_core import LLMProvider
@@ -13,7 +15,8 @@ from agents.storage import StorageManager
 logger = logging.getLogger(__name__)
 
 class AgentController:
-    def __init__(self, bot_id: str, mission: str, llm: LLMProvider, profile_path: str = None):
+    def __init__(self, bot_url: str, llm: LLMProvider, mission: str, bot_id: str = "Bot1", profile_path: str = None):
+        self.bot_url = bot_url
         self.bot_id = bot_id
         self.mission = mission
         self.llm = llm
@@ -49,6 +52,39 @@ class AgentController:
         # Persistence
         self.storage = StorageManager(bot_id)
         self.memory, self.locations, self.long_term_memory = self.storage.load()
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(requests.exceptions.ConnectionError),
+        reraise=True
+    )
+    def observe(self):
+        """Synchronous observation for tests/polling mode."""
+        try:
+            r = requests.get(f"{self.bot_url}/observe", timeout=5)
+            if r.status_code == 200:
+                self.latest_observation = r.json()
+                return self.latest_observation
+        except requests.exceptions.ConnectionError:
+            # Re-raise for tenacity to catch
+            raise
+        except Exception as e:
+            logger.error(f"Observe error: {e}")
+            raise
+        return None
+
+    def act(self, action: Dict[str, Any]):
+        """Synchronous action for tests/polling mode."""
+        try:
+            r = requests.post(f"{self.bot_url}/act", json=action, timeout=5)
+            if r.status_code == 200:
+                data = r.json()
+                return data.get("action_id")
+        except Exception as e:
+            logger.error(f"Act error: {e}")
+            raise
+        return None
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -183,9 +219,18 @@ class AgentController:
         error = action_state.get('error')
         data = action_state.get('data')
         
+        zone_report = ""
         if status == 'completed':
             if signal == "ZoneInspected" and data:
-                 last_result = f"INSPECT RESULT: {len(data)} blocks found." # Simplified
+                origin = data.get('origin', {})
+                layers = data.get('layers', [])
+                zone_report = f"\nZONE INSPECTION (Origin: {origin.get('x')}, {origin.get('y')}, {origin.get('z')}):\n"
+                for y_idx, layer in enumerate(layers):
+                    abs_y = origin.get('y', 0) + y_idx
+                    zone_report += f"--- Layer Y+{y_idx} (Abs {abs_y}) ---\n"
+                    for z_idx, row in enumerate(layer):
+                        zone_report += f"Z+{z_idx}: {row}\n"
+                last_result = f"INSPECT RESULT: {len(layers)} layers processed."
             else:
                 last_result = f"SUCCESS: {signal}"
         elif status == 'failed':
@@ -205,6 +250,8 @@ class AgentController:
             locations=locations_str,
             last_result=last_result
         )
+        if zone_report:
+            system_prompt += zone_report
         
         user_prompt = f"""
         OBSERVATION:

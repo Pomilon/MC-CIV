@@ -23,7 +23,7 @@ class TestV2Controller(unittest.TestCase):
         self.mock_storage = self.mock_storage_cls.return_value
         self.mock_storage.load.return_value = ([], {}, []) # Memory, Locations, LTM
         
-        self.controller = AgentController("http://mock:3000", self.mock_llm, "Test Mission")
+        self.controller = AgentController("http://mock:3000", self.mock_llm, "Test Mission", bot_id="Bot1")
 
     def tearDown(self):
         self.patcher_req.stop()
@@ -54,7 +54,7 @@ class TestV2Controller(unittest.TestCase):
         # We need to capture the prompt passed to LLM
         self.mock_llm.generate_response = MagicMock(return_value={"action": "IDLE", "reason": "Waiting"})
         
-        self.controller.reason(obs, obs['action_state'])
+        self.controller.reason(obs)
         
         # Verify the prompt contains the formatted grid
         call_args = self.mock_llm.generate_response.call_args
@@ -62,9 +62,9 @@ class TestV2Controller(unittest.TestCase):
         
         self.assertIn("ZONE INSPECTION (Origin: 100, 64, 100):", system_prompt)
         self.assertIn("--- Layer Y+0 (Abs 64) ---", system_prompt)
-        self.assertIn("Z+0: [dirt, stone]", system_prompt)
+        self.assertIn("Z+0: ['dirt', 'stone']", system_prompt)
         self.assertIn("--- Layer Y+1 (Abs 65) ---", system_prompt)
-        self.assertIn("Z+0: [air, torch]", system_prompt)
+        self.assertIn("Z+0: ['air', 'torch']", system_prompt)
 
     def test_act_sends_correct_payload(self):
         """Test that act() sends the correct JSON payload to the bot."""

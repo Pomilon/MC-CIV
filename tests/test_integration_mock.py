@@ -13,7 +13,7 @@ class TestIntegrationMock(unittest.TestCase):
             os.makedirs(self.test_dir)
         self.bot_id = "IntegrationBot"
         self.llm = MockLLM()
-        self.controller = AgentController("http://mock-url", self.llm, "Integration Mission", self.bot_id, profile_path=None)
+        self.controller = AgentController("http://mock-url", self.llm, "Integration Mission", bot_id=self.bot_id, profile_path=None)
         # Override storage path for test
         self.controller.storage.folder = self.test_dir
         self.controller.storage.filepath = os.path.join(self.test_dir, f"{self.bot_id}_memory.json")
@@ -52,7 +52,7 @@ class TestIntegrationMock(unittest.TestCase):
         # Let's force it for this specific test to ensure deterministic assertion if needed, 
         # but the random one is also fine as long as we check keys.
         
-        action = self.controller.reason(obs, obs['action_state'])
+        action = self.controller.reason(obs)
         self.assertIn('action', action)
         
         # Act

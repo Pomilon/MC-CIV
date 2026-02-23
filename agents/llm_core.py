@@ -5,9 +5,9 @@ import random
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from google.api_core.exceptions import ResourceExhausted
-from google.generativeai.types import FunctionDeclaration, Tool
 from openai import OpenAI, AzureOpenAI
 import anthropic
 from pydantic import TypeAdapter, ValidationError
@@ -103,7 +103,7 @@ def pydantic_to_gemini_tool(model):
         if 'enum' in v:
             properties[k]['enum'] = v['enum']
 
-    return FunctionDeclaration(
+    return types.FunctionDeclaration(
         name=model.__name__,
         description=f"Perform a {model.__name__}",
         parameters={
@@ -132,7 +132,7 @@ class GeminiLLM(LLMProvider):
         self.model_name = model_name
         
         # Default Agent Tools
-        self.default_tools = Tool(function_declarations=[pydantic_to_gemini_tool(m) for m in ALL_ACTIONS])
+        self.default_tools = [types.Tool(function_declarations=[pydantic_to_gemini_tool(m) for m in ALL_ACTIONS])]
 
     def _get_current_key(self):
         if not self.api_keys:
@@ -152,7 +152,7 @@ class GeminiLLM(LLMProvider):
         active_tools = self.default_tools
         if tools:
             declarations = [pydantic_to_gemini_tool(m) for m in tools]
-            active_tools = Tool(function_declarations=declarations)
+            active_tools = [types.Tool(function_declarations=declarations)]
 
         max_retries = 5
         base_delay = 2
@@ -160,15 +160,24 @@ class GeminiLLM(LLMProvider):
         for attempt in range(max_retries):
             try:
                 current_key = self._get_current_key()
-                genai.configure(api_key=current_key)
+                client = genai.Client(api_key=current_key)
                 
-                model = genai.GenerativeModel(self.model_name, tools=[active_tools])
-                chat = model.start_chat()
                 full_prompt = f"{system_prompt}\n\n{user_prompt}"
                 
-                response = chat.send_message(full_prompt)
+                response = client.models.generate_content(
+                    model=self.model_name,
+                    contents=full_prompt,
+                    config=types.GenerateContentConfig(
+                        tools=active_tools,
+                        tool_config=types.ToolConfig(
+                            function_calling_config=types.FunctionCallingConfig(
+                                mode="ANY"
+                            )
+                        ) if tools else None
+                    )
+                )
                 
-                for part in response.parts:
+                for part in response.candidates[0].content.parts:
                     if part.function_call:
                         fc = part.function_call
                         args = dict(fc.args)

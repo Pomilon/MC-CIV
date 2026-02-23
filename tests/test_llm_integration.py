@@ -5,16 +5,17 @@ from agents.llm_core import GeminiLLM, OpenAILLM, MockLLM, get_llm_provider
 
 class TestLLMIntegration(unittest.TestCase):
     
-    @patch('google.generativeai.GenerativeModel')
-    def test_gemini_tool_generation(self, mock_model_cls):
+    @patch('google.genai.Client')
+    def test_gemini_tool_generation(self, mock_client_cls):
         # We test that the tools are generated without error
         llm = GeminiLLM(api_key="fake_key")
         # In my refactor I renamed self.tools to self.default_tools, but exposed self.tools for testing
         self.assertIsNotNone(llm.default_tools)
-        # Check if FunctionDeclarations are present
-        self.assertTrue(hasattr(llm.default_tools, 'function_declarations'))
-        # We added 2 new actions (SaveLocation, SetExplorationMode), total is now 12 actions
-        self.assertEqual(len(llm.default_tools.function_declarations), 31) 
+        # Check if Tool and FunctionDeclarations are present
+        self.assertIsInstance(llm.default_tools, list)
+        self.assertTrue(len(llm.default_tools) > 0)
+        self.assertTrue(hasattr(llm.default_tools[0], 'function_declarations'))
+        self.assertEqual(len(llm.default_tools[0].function_declarations), 31) 
 
     def test_factory(self):
         llm = get_llm_provider("gemini", api_key="test")

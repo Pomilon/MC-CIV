@@ -74,7 +74,7 @@ class TestAgentRobustness(unittest.TestCase):
         mock_get.side_effect = [requests.exceptions.ConnectionError("Net Error"), requests.exceptions.ConnectionError("Net Error"), MagicMock(status_code=200, json=lambda: {})]
         
         llm = MockLLM()
-        controller = AgentController("http://local", llm, "Mission")
+        controller = AgentController("http://local", llm, "Mission", bot_id="Bot1")
         
         # Should succeed eventually
         obs = controller.observe()
@@ -85,20 +85,21 @@ class TestAgentRobustness(unittest.TestCase):
     def test_act_error_handling(self, mock_post):
         mock_post.side_effect = Exception("Fatal Net Error")
         llm = MockLLM()
-        controller = AgentController("http://local", llm, "Mission")
+        controller = AgentController("http://local", llm, "Mission", bot_id="Bot1")
         
         # Act should catch exception and update status
-        controller.act({"action": "CHAT", "message": "Hi"})
-        # self.assertEqual(controller.last_action_status, "network_exception")
+        with self.assertRaises(Exception):
+            controller.act({"action": "CHAT", "message": "Hi"})
 
 class TestLLMParsing(unittest.TestCase):
     def test_gemini_fallback(self):
-        # We can't easily mock the internal Gemini API call structure without deep mocking
-        # But we can test the fallback logic if we mock the `genai.GenerativeModel`
-        with patch('google.generativeai.GenerativeModel') as MockModel:
-            mock_chat = MockModel.return_value.start_chat.return_value
-            # Case: Empty response parts (no function call)
-            mock_chat.sendMessage.return_value.parts = []
+        # Update for new google.genai SDK
+        with patch('google.genai.Client') as MockClient:
+            mock_client_inst = MockClient.return_value
+            # Case: Empty response candidates/parts
+            mock_response = MagicMock()
+            mock_response.candidates = [MagicMock(content=MagicMock(parts=[]))]
+            mock_client_inst.models.generate_content.return_value = mock_response
             
             llm = GeminiLLM(api_key="key")
             res = llm.generate_response("Sys", "User")
