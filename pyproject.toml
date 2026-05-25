@@ -1,0 +1,24 @@
+[project]
+name = "mc-civ"
+version = "0.1.0"
+description = "AI-Powered Minecraft Storytelling Server"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = [
+    "E501",  # Line length — handled by formatter
+    "N801",  # Class names in UPPER_SNAKE — intentional action contract
+    "N999",  # Module name not lowercase — allows agent_process.py
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F403", "F405"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

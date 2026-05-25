@@ -1,8 +1,8 @@
-import os
+import logging
 import socket
+
 from mcrcon import MCRcon, MCRconException
 from tenacity import retry, stop_after_attempt, wait_fixed
-import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

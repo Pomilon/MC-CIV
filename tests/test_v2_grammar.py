@@ -1,79 +1,78 @@
 import unittest
+
 from pydantic import TypeAdapter, ValidationError
+
 from agents.grammar import (
-    AgentAction, MoveAction, AttackAction, BuildStructure, 
-    PlaceBlock, BreakBlock, InspectZone, ThrowItem, UseItem,
-    MountEntity, Sleep, StopAction
+    BREAK_BLOCK,
+    INSPECT_ZONE,
+    MOUNT,
+    MOVE,
+    PLACE_BLOCK,
+    SLEEP,
+    STOP,
+    THROW_ITEM,
+    USE_ITEM,
+    AgentAction,
 )
+
 
 class TestV2Grammar(unittest.TestCase):
     def setUp(self):
         self.adapter = TypeAdapter(AgentAction)
 
     def test_core_actions(self):
-        # Move
         obj = self.adapter.validate_python({"action": "MOVE", "target": "100 64 100"})
-        self.assertIsInstance(obj, MoveAction)
-        
-        # Stop
+        self.assertIsInstance(obj, MOVE)
+
         obj = self.adapter.validate_python({"action": "STOP", "reason": "danger"})
-        self.assertIsInstance(obj, StopAction)
+        self.assertIsInstance(obj, STOP)
 
     def test_new_interactions(self):
-        # Break Block (Search)
         obj = self.adapter.validate_python({"action": "BREAK_BLOCK", "block_name": "diamond_ore"})
-        self.assertIsInstance(obj, BreakBlock)
+        self.assertIsInstance(obj, BREAK_BLOCK)
         self.assertIsNone(obj.position)
 
-        # Break Block (Coords)
         obj = self.adapter.validate_python({"action": "BREAK_BLOCK", "position": "10 60 10"})
-        self.assertIsInstance(obj, BreakBlock)
-        
-        # Place Block (Coords)
+        self.assertIsInstance(obj, BREAK_BLOCK)
+
         obj = self.adapter.validate_python({
-            "action": "PLACE_BLOCK", 
-            "block_name": "torch", 
+            "action": "PLACE_BLOCK",
+            "block_name": "torch",
             "position": "10 61 10"
         })
-        self.assertIsInstance(obj, PlaceBlock)
+        self.assertIsInstance(obj, PLACE_BLOCK)
 
-        # Place Block (Near)
         obj = self.adapter.validate_python({
-            "action": "PLACE_BLOCK", 
-            "block_name": "torch", 
+            "action": "PLACE_BLOCK",
+            "block_name": "torch",
             "near_block": "crafting_table"
         })
-        self.assertIsInstance(obj, PlaceBlock)
-        
-        # Inspect Zone
+        self.assertIsInstance(obj, PLACE_BLOCK)
+
         obj = self.adapter.validate_python({
             "action": "INSPECT_ZONE",
             "corner1": "0 60 0",
             "corner2": "5 65 5"
         })
-        self.assertIsInstance(obj, InspectZone)
+        self.assertIsInstance(obj, INSPECT_ZONE)
 
     def test_items_entities(self):
-        # Throw
         obj = self.adapter.validate_python({"action": "THROW_ITEM", "item_name": "dirt", "count": 64})
-        self.assertIsInstance(obj, ThrowItem)
-        
-        # Use
+        self.assertIsInstance(obj, THROW_ITEM)
+
         obj = self.adapter.validate_python({"action": "USE_ITEM", "item_name": "potion"})
-        self.assertIsInstance(obj, UseItem)
-        
-        # Mount
+        self.assertIsInstance(obj, USE_ITEM)
+
         obj = self.adapter.validate_python({"action": "MOUNT", "target": "horse"})
-        self.assertIsInstance(obj, MountEntity)
-        
-        # Sleep
+        self.assertIsInstance(obj, MOUNT)
+
         obj = self.adapter.validate_python({"action": "SLEEP", "reason": "night"})
-        self.assertIsInstance(obj, Sleep)
+        self.assertIsInstance(obj, SLEEP)
 
     def test_invalid_actions(self):
-        # Invalid Action Name
         with self.assertRaises(ValidationError):
             self.adapter.validate_python({"action": "DANCE_PARTY"})
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -22,20 +22,25 @@ Instead of rigid NPC scripts, this system uses Large Language Models (LLMs) to p
 - **RCON Integration:** Directly interfaces with the Minecraft server console.
 
 ### 🤖 The Agent Swarm
-- **Hybrid Intelligence:** Combines LLM reasoning (Commanders) with programmed autonomous behaviors (Soldiers).
-- **Multi-Provider Support:** Plug-and-play support for **Google Gemini**, **OpenAI**, **Anthropic (Claude)**, **Groq**, and **Ollama**.
+- **Hybrid Intelligence:** Combines LLM reasoning (Brain) with a Node.js Mineflayer client (Body).
+- **Multi-Provider Support:** **Google Gemini**, **OpenAI**, **Anthropic (Claude)**, **Groq**, and **Ollama**.
+- **Interruptible Actions:** Agents can chat, equip, and manage inventory while a physical action (move, build, gather) is running — no need to wait.
+- **Side Conversation:"** When a player chats during a long action, the agent forks into a temporary context with limited tools (chat, equip, inventory) instead of losing its train of thought. When the action completes, the side exchange is squashed into a summary.
 - **Autonomous Modes:**
-  - **PvP Mode:** Agents can autonomously hunt and fight targets using advanced combat logic (`mineflayer-pvp`).
-  - **Exploration:** Agents can wander or follow specific targets autonomously.
-  - **Survival:** Auto-eating, auto-sleeping, and inventory management.
-  - **Building:** Capable of executing construction macros (walls, floors) on command.
-- **Location Memory:** Agents remember key locations (e.g., "Home", "Base") and can navigate back to them.
-- **Proximity Chat:** Agents communicate with players nearby, respecting conversation turns.
+  - **PvP:** Hunt and fight targets using `mineflayer-pvp`.
+  - **Exploration:** Wander, follow, systemically map, or find biomes.
+  - **Survival:** Auto-eat, auto-sleep, farm, smelt, craft, enchant, repair, fish, and trade with villagers.
+  - **Building:** Construction macros (walls, floors, boxes, towers, pyramids, stairs).
+  - **Inventory:** Auto-sort, equip best, discard junk.
+- **41 Action Tools:** MOVE, GATHER, MINE, BUILD, CRAFT, SMELT, CHAT, TRADE, ENCHANT, REPAIR, DEPOSIT, WITHDRAW, USE_ON (shear, milk, bone meal, flint & steel, brush, leash, name tag, saddle, bottle, honeycomb, tame/breed), FISH, HUNT, FARM, and more.
+- **Memory System:** Three-layer memory (working/episodic/semantic) with automatic consolidation.
+- **Proximity Chat:** Agents hear players within 50 blocks and respond via LLM.
 
 ### 🏗 Architecture
-- **Commander-Executor Pattern:** To avoid LLM latency lag, the Python backend ("Commander") issues high-level directives (e.g., `SET_COMBAT_MODE`), while the Node.js client ("Executor") handles the tick-perfect execution.
-- **Strict Grammar:** Uses a typed JSON grammar to ensure reliable LLM outputs (no hallucinations in commands).
-- **Persistence:** Agent memories and locations are saved to disk, persisting across restarts.
+- **Brain-Body (Commander-Executor) Pattern:** The Python backend ("Brain") issues high-level directives, while the Node.js Mineflayer client ("Body") handles real-time physics, pathfinding, and block interaction.
+- **Strict Grammar:** Pydantic models enforce typed JSON outputs from the LLM — no malformed commands.
+- **WebSocket Orchestrator:** A lightweight message bus connects Brain ↔ Body, routing commands, action results, observations, and chat events.
+- **Interruptible Wait Loop:** The agent never blocks. It races the pending action against the interrupt queue, remaining responsive to chat and events.
 
 ## 🚀 Getting Started
 
@@ -94,14 +99,17 @@ Instead of rigid NPC scripts, this system uses Large Language Models (LLMs) to p
 
    **Run with Real Server:**
    ```bash
-   # Gemini
-   python cli/main.py --mode real --provider gemini --bots 2
+   # Gemini (LAN world — disable narrator since RCON won't work)
+   python cli/main.py --mode real --provider gemini --bots 1 --disable-narrator
 
    # Claude (Anthropic)
    python cli/main.py --mode real --provider claude --bots 2
 
    # Local Ollama
    python cli/main.py --mode real --provider ollama --model llama3.1
+
+   # Custom Minecraft server host/port
+   python cli/main.py --mode real --host 192.168.1.100 --port 44444 --bots 1
    ```
 
 ## 🧪 Testing
@@ -131,12 +139,14 @@ Agents appear as players in the game. You can talk to them via in-game chat.
 
 ## 📂 Project Structure
 
-- `agents/`: Python logic for the Agent Brain (LLM interaction, Memory, Controller).
-- `bot-client/`: Node.js/Mineflayer application for the Agent Body (Physics, Pathfinding, PvP).
-- `narrator/`: Logic for the Global Storyteller.
-- `infrastructure/`: RCON and Game State APIs.
-- `cli/`: Entry point and process management.
-- `tests/`: Comprehensive unit tests.
+- `agents/`: Python Brain — LLM interaction, ReAct loop, memory system, tools, context builder, observation renderer.
+- `bot-client/`: Node.js Body — Mineflayer bot, action dispatch, pathfinding, behaviors (combat, building, survival, etc.).
+- `narrator/`: Global storyteller — polls server state, triggers events, broadcasts narrative.
+- `orchestrator/`: WebSocket message bus that connects Brains to Bodies.
+- `infrastructure/`: RCON and game state API.
+- `cli/`: CLI entry point and process management.
+- `dashboard/`: Web dashboard for monitoring agents.
+- `tests/`: Python and JS test suites.
 
 ## 🤝 Contribution
 

@@ -1,6 +1,8 @@
 import unittest
-from infrastructure.rcon_client import MockRconClient
+
 from infrastructure.game_state import GameStateAPI
+from infrastructure.rcon_client import MockRconClient
+
 
 class TestGameStateAPI(unittest.TestCase):
     def setUp(self):

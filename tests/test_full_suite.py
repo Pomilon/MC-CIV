@@ -1,45 +1,40 @@
-import unittest
-from unittest.mock import MagicMock, patch
 import os
 import shutil
-import json
-import requests
+import unittest
 from collections import deque
-from tenacity import RetryError
+from unittest.mock import MagicMock, patch
 
-# Import classes to test
 from agents.grammar import *
-from agents.llm_core import GeminiLLM, OpenAILLM, MockLLM, get_llm_provider
-from agents.controller import AgentController
+from agents.llm_core import GeminiLLM, MockLLM
 from agents.storage import StorageManager
-from narrator.story_engine import StoryEngine
-from infrastructure.rcon_client import MockRconClient
 from infrastructure.game_state import GameStateAPI
+from infrastructure.rcon_client import MockRconClient
+from narrator.agent import NarratorAgent
+
 
 class TestGrammarRobustness(unittest.TestCase):
     def test_all_actions(self):
-        # Verify every model accepts valid inputs
         actions = [
-            MoveAction(target="Zombie"),
-            ChatAction(message="Hi"),
-            MineAction(block_name="stone"),
-            CraftAction(item_name="stick"),
-            EquipAction(item_name="sword"),
-            IdleAction(reason="waiting"),
-            AttackAction(mode="pvp", target="Player"),
-            ConfigureBehavior(mode="self_defense", setting="fight"),
-            BuildStructure(shape="wall", material="stone", dimensions="10 5 1", location="0 0 0"),
-            ManageInventory(task="sort"),
-            SaveLocation(name="Home"),
-            ExploreAction(mode="wander")
+            MOVE(target="Zombie"),
+            CHAT(message="Hi"),
+            MINE(block_name="stone"),
+            CRAFT(item_name="stick"),
+            EQUIP(item_name="sword"),
+            IDLE(reason="waiting"),
+            SET_COMBAT_MODE(mode="pvp", target="Player"),
+            CONFIGURE(mode="self_defense", setting="fight"),
+            BUILD(shape="wall", material="stone", dimensions="10 5 1", location="0 0 0"),
+            INVENTORY(task="sort"),
+            SAVE_LOCATION(name="Home"),
+            SET_EXPLORATION_MODE(mode="wander")
         ]
         for a in actions:
             self.assertIsNotNone(a.model_dump())
 
     def test_invalid_grammar(self):
-        # Validate validation logic (pydantic throws)
         with self.assertRaises(ValueError):
-            AttackAction(mode="invalid_mode") 
+            SET_COMBAT_MODE(mode="invalid_mode")
+
 
 class TestPersistence(unittest.TestCase):
     def setUp(self):
@@ -47,7 +42,7 @@ class TestPersistence(unittest.TestCase):
         if not os.path.exists(self.test_dir):
             os.makedirs(self.test_dir)
         self.bot_id = "TestBotPersistence"
-        
+
     def tearDown(self):
         if os.path.exists(self.test_dir):
             shutil.rmtree(self.test_dir)
@@ -56,65 +51,38 @@ class TestPersistence(unittest.TestCase):
         storage = StorageManager(self.bot_id, self.test_dir)
         memory = deque(["Mem1", "Mem2"], maxlen=15)
         locations = {"Home": "1 2 3"}
-        
+
         storage.save(memory, locations)
-        
-        # Verify file exists
         self.assertTrue(os.path.exists(storage.filepath))
-        
-        # Load back
+
         mem_loaded, loc_loaded, ltm_loaded = storage.load()
         self.assertEqual(list(mem_loaded), list(memory))
         self.assertEqual(loc_loaded, locations)
 
-class TestAgentRobustness(unittest.TestCase):
-    @patch('requests.get')
-    def test_retry_observe(self, mock_get):
-        
-        mock_get.side_effect = [requests.exceptions.ConnectionError("Net Error"), requests.exceptions.ConnectionError("Net Error"), MagicMock(status_code=200, json=lambda: {})]
-        
-        llm = MockLLM()
-        controller = AgentController("http://local", llm, "Mission", bot_id="Bot1")
-        
-        # Should succeed eventually
-        obs = controller.observe()
-        self.assertIsNotNone(obs)
-        self.assertEqual(mock_get.call_count, 3)
-
-    @patch('requests.post')
-    def test_act_error_handling(self, mock_post):
-        mock_post.side_effect = Exception("Fatal Net Error")
-        llm = MockLLM()
-        controller = AgentController("http://local", llm, "Mission", bot_id="Bot1")
-        
-        # Act should catch exception and update status
-        with self.assertRaises(Exception):
-            controller.act({"action": "CHAT", "message": "Hi"})
 
 class TestLLMParsing(unittest.TestCase):
     def test_gemini_fallback(self):
-        # Update for new google.genai SDK
         with patch('google.genai.Client') as MockClient:
             mock_client_inst = MockClient.return_value
-            # Case: Empty response candidates/parts
             mock_response = MagicMock()
             mock_response.candidates = [MagicMock(content=MagicMock(parts=[]))]
             mock_client_inst.models.generate_content.return_value = mock_response
-            
+
             llm = GeminiLLM(api_key="key")
-            res = llm.generate_response("Sys", "User")
+            res = llm.generate_response([{"role": "user", "content": "Sys"}])
             self.assertEqual(res['action'], 'IDLE')
             self.assertIn("No tool called", res['reason'])
 
-class TestStoryEngine(unittest.TestCase):
-    def test_narrator_loop(self):
+
+class TestNarratorAgent(unittest.TestCase):
+    def test_narrator_tick(self):
         rcon = MockRconClient("h", 1, "p")
         api = GameStateAPI(rcon)
         llm = MockLLM()
-        engine = StoryEngine(api, llm)
-        
-        # Dry run check state
-        engine.check_global_state()
+        import asyncio
+        agent = NarratorAgent(api, llm, interval=999)
+        asyncio.run(agent._tick())
+
 
 if __name__ == '__main__':
     unittest.main()

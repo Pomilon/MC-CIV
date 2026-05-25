@@ -1,10 +1,10 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+import logging
+from typing import Dict, List
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import List, Dict
-import json
-import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Dashboard")
@@ -13,6 +13,7 @@ app = FastAPI()
 
 # Mount static files
 import os
+
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")

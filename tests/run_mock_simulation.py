@@ -1,10 +1,11 @@
 import asyncio
-import subprocess
-import os
-import sys
-import time
 import json
 import logging
+import os
+import subprocess
+import sys
+import time
+
 import websockets
 
 # Configure logging
@@ -39,7 +40,7 @@ async def run_simulation():
         stdout=subprocess.DEVNULL, # Keep it clean
         stderr=subprocess.DEVNULL
     )
-    
+
     if not await wait_for_port(DASHBOARD_PORT):
         logger.error("Dashboard failed to start.")
         dashboard_proc.terminate()
@@ -55,37 +56,37 @@ async def run_simulation():
     )
 
     success = False
-    
+
     try:
         # 3. Connect to Dashboard Client WS
         uri = f"ws://localhost:{DASHBOARD_PORT}/ws/client"
         async with websockets.connect(uri) as ws:
             logger.info("Connected to Dashboard stream.")
-            
+
             # Wait for updates
             start_time = time.time()
             while time.time() - start_time < 30: # 30s timeout
                 try:
                     msg = await asyncio.wait_for(ws.recv(), timeout=5.0)
                     data = json.loads(msg)
-                    
+
                     if data.get("type") == "update" and data.get("bot_id") == "MockBot1":
                         agent_data = data.get("data", {})
                         action_state = agent_data.get("action_state", {})
-                        
+
                         logger.info(f"Received Update: State={agent_data.get('internal_state')} Action={action_state.get('type')}")
-                        
+
                         # Check for signs of life
                         if agent_data.get("internal_state") == "EXECUTING":
                             logger.info("Agent is EXECUTING! Pipeline verified.")
                             success = True
                             break
-                        
+
                         if action_state.get("status") == "completed":
                             logger.info("Agent completed an action! Pipeline verified.")
                             success = True
                             break
-                            
+
                 except asyncio.TimeoutError:
                     logger.warning("No message received in 5s...")
                     # Check if agent is still running
@@ -102,7 +103,7 @@ async def run_simulation():
         logger.info("Cleaning up...")
         agent_proc.terminate()
         dashboard_proc.terminate()
-        
+
         # Log Agent Output if failed
         if not success:
             stdout, stderr = agent_proc.communicate()

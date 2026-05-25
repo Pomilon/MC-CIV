@@ -1,6 +1,6 @@
 import json
-import os
 import logging
+import os
 from collections import deque
 
 logger = logging.getLogger(__name__)
@@ -10,7 +10,7 @@ class StorageManager:
         self.bot_id = bot_id
         self.data_dir = data_dir
         self.filepath = os.path.join(data_dir, f"{bot_id}.json")
-        
+
         if not os.path.exists(data_dir):
             os.makedirs(data_dir)
 
@@ -30,11 +30,11 @@ class StorageManager:
     def load(self) -> tuple[deque, dict, list]:
         if not os.path.exists(self.filepath):
             return deque(maxlen=15), {}, []
-        
+
         try:
             with open(self.filepath, 'r') as f:
                 data = json.load(f)
-            
+
             memory = deque(data.get("memory", []), maxlen=15)
             locations = data.get("locations", {})
             long_term_memory = data.get("long_term_memory", [])
