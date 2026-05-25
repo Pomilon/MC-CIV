@@ -62,8 +62,8 @@ class TestPersistence(unittest.TestCase):
 
 class TestLLMParsing(unittest.TestCase):
     def test_gemini_fallback(self):
-        with patch('google.genai.Client') as MockClient:
-            mock_client_inst = MockClient.return_value
+        with patch('google.genai.Client') as mock_client:
+            mock_client_inst = mock_client.return_value
             mock_response = MagicMock()
             mock_response.candidates = [MagicMock(content=MagicMock(parts=[]))]
             mock_client_inst.models.generate_content.return_value = mock_response

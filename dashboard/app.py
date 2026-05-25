@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Dict, List
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -12,8 +13,6 @@ logger = logging.getLogger("Dashboard")
 app = FastAPI()
 
 # Mount static files
-import os
-
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -51,7 +50,7 @@ class ConnectionManager:
         for connection in self.web_clients:
             try:
                 await connection.send_json(message)
-            except:
+            except Exception:
                 pass
 
     async def update_agent_state(self, bot_id: str, data: dict):

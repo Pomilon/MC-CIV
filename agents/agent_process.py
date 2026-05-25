@@ -6,10 +6,11 @@ import os
 import sys
 
 from dotenv import load_dotenv
-load_dotenv()
 
 from agents.agent import AgentController
 from agents.llm_core import get_llm_provider
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='[%(name)s] %(message)s')

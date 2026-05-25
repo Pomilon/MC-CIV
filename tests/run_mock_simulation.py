@@ -23,7 +23,7 @@ async def wait_for_port(port, timeout=10):
             writer.close()
             await writer.wait_closed()
             return True
-        except:
+        except Exception:
             await asyncio.sleep(0.5)
     return False
 

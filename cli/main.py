@@ -8,12 +8,13 @@ import threading
 import time
 
 from dotenv import load_dotenv
-load_dotenv()
 
 from agents.llm_core import get_llm_provider
 from infrastructure.game_state import GameStateAPI
 from infrastructure.rcon_client import MockRconClient, RconClient
 from narrator.agent import NarratorAgent
+
+load_dotenv()
 
 AGENT_PROCESSES = []
 ORCHESTRATOR_PROCESS = None

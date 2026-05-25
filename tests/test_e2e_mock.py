@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import subprocess
 import sys
@@ -156,7 +155,7 @@ class TestComponentIntegration(unittest.TestCase):
         self.assertIn("diamond_sword", text)
 
     def test_session_state_machine(self):
-        from agents.session import AgentSession, ActionResult
+        from agents.session import ActionResult, AgentSession
 
         session = AgentSession(idle_timeout=30.0)
         self.assertFalse(session.has_pending_action())

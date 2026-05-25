@@ -63,7 +63,7 @@ async def run_test():
             # Also kill children if any stubborn ones
             subprocess.run(["pkill", "-9", "-f", "agents.controller"])
             subprocess.run(["pkill", "-9", "-f", "node index.js"])
-        except:
+        except Exception:
             pass
 
     return success

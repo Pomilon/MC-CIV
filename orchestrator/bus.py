@@ -47,7 +47,7 @@ class MessageBus:
         for client in self.web_clients:
             try:
                 await client.send_json(payload)
-            except:
+            except Exception:
                 pass
 
     async def register(self, bot_id: str, side: str, websocket: WebSocket):
