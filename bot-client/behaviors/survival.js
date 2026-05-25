@@ -91,7 +91,7 @@ async function gatherResource(bot, resourceName, count = 1) {
       try {
         const angle = Math.random() * Math.PI * 2;
         const target = bot.entity.position.offset(
-          Math.cos(angle) * 12, 0, Math.sin(angle) * 12
+          Math.cos(angle) * 12, 0, Math.sin(angle) * 12,
         );
         await bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, 2));
       } catch (_) {
@@ -115,7 +115,7 @@ async function gatherResource(bot, resourceName, count = 1) {
     try {
       collectPromise = bot.collectBlock.collect(block);
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Collect Timeout')), 20000)
+        setTimeout(() => reject(new Error('Collect Timeout')), 20000),
       );
       await Promise.race([collectPromise, timeoutPromise]);
 
