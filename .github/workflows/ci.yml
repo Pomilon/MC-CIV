@@ -25,14 +25,7 @@ jobs:
         pip install ruff
         pip install -r requirements.txt
 
-    - name: Lint Python
-      run: ruff check .
-
-    - name: Run Python Tests
-      run: |
-        python -m unittest discover tests -v
-
-    # --- Node.js Setup ---
+    # --- Node.js Setup (before Python tests - subprocess tests need node_modules) ---
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
@@ -42,6 +35,13 @@ jobs:
       run: |
         cd bot-client
         npm ci
+
+    - name: Lint Python
+      run: ruff check .
+
+    - name: Run Python Tests
+      run: |
+        python -m unittest discover tests -v
 
     - name: Lint JavaScript
       run: |
